@@ -1,0 +1,52 @@
+using System;
+using System.Threading;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.CoreSolo;
+
+namespace IronBabel.Box.Xbox.Kernel {
+	public partial class XboxKrnl {
+		AllocLock : Mutex = Mutex();
+		mutable LastAlloc : uint * uint = (0U, 0U);
+		public mutable Reserved : uint * uint * uint = (0xFFFFFFFFU, 0xFFFFFFFFU, 0U);
+		
+		public Allocate(CPU : CoreSolo, size : uint) : uint {
+			_ = AllocLock.WaitOne();
+			
+			def (virt, phys) = LastAlloc;
+			def (resvirt, resphys, ressize) = Reserved;
+			def (virt, phys) = 
+				(
+					if(virt < resvirt && virt + size < resvirt) virt
+					else if(virt >= resvirt + ressize) virt
+					else {
+						def addr = resvirt + ressize;
+						addr + (0x1000U - (addr & 0xFFFU))
+					},
+					if(phys < resphys && phys + size < resphys) phys
+					else if(phys >= resphys + ressize) phys
+					else {
+						def addr = resphys + ressize;
+						addr + (0x1000U - (addr & 0xFFFU))
+					}
+				);
+			print "Allocating {0} bytes at {1:X8}-{2:X8}" <- (size, virt, virt+size);
+			LastAlloc = (virt + size, phys + size);
+			CPU.MMU.AddPages(virt, phys, size, PageFlags.All);
+			AllocLock.ReleaseMutex();
+			virt
+		}
+		
+		public Free(_CPU : CoreSolo, _addr : uint) : void {
+			throw Exception("Free not supported")
+		}
+		
+		public Realloc(_CPU : CoreSolo, _addr : uint, _size : uint) : uint {
+			throw Exception("Realloc not supported")
+		}
+	}
+}

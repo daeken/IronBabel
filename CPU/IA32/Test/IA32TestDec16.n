@@ -1,0 +1,86 @@
+using IronBabel.CPU.IA32.Test.Macros;
+
+namespace IronBabel.CPU.IA32.Test {
+	public partial class Arith16 {
+		test dec_AX() : void {
+			setup {
+				32 = false;
+				ax = 3U :> ushort
+			}
+			code(bits=16) {
+				dec[0x48]()
+			}
+			expects ax == 2U
+		}
+		test dec_CX() : void {
+			setup {
+				32 = false;
+				cx = 3U :> ushort
+			}
+			code(bits=16) {
+				dec[0x49]()
+			}
+			expects cx == 2U
+		}
+		test dec_DX() : void {
+			setup {
+				32 = false;
+				dx = 3U :> ushort
+			}
+			code(bits=16) {
+				dec[0x4A]()
+			}
+			expects dx == 2U
+		}
+		test dec_BX() : void {
+			setup {
+				32 = false;
+				bx = 3U :> ushort
+			}
+			code(bits=16) {
+				dec[0x4B]()
+			}
+			expects bx == 2U
+		}
+		test dec_SP() : void {
+			setup {
+				32 = false;
+				sp = 3U :> ushort
+			}
+			code(bits=16) {
+				dec[0x4C]()
+			}
+			expects sp == 2U
+		}
+		test dec_BP() : void {
+			setup {
+				32 = false;
+				bp = 3U :> ushort
+			}
+			code(bits=16) {
+				dec[0x4D]()
+			}
+			expects bp == 2U
+		}
+		test dec_SI() : void {
+			setup {
+				32 = false;
+				si = 3U :> ushort
+			}
+			code(bits=16) {
+				dec[0x4E]()
+			}
+			expects si == 2U
+		}
+		test dec_DI() : void {
+			setup {
+				32 = false;
+				di = 3U :> ushort
+			}
+			code(bits=16) {
+				dec[0x4F]()
+			}
+			expects di == 2U
+		}
+	}
+}

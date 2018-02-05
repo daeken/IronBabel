@@ -1,0 +1,244 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel;
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.IA32;
+
+namespace IronBabel.CPU.IA32 {
+	public partial class IA32 : BaseCPU {
+		protected Group1(dest : Expr, src : Expr, reg : uint, size : int) : void {
+			match(reg) {
+				| 0b000 => dest := dest + src
+				| 0b001 => dest := dest %| src
+				| 0b010 => dest := dest ^+ src
+				| 0b011 => dest := dest ^- src
+				| 0b100 => dest := dest & src
+				| 0b101 => dest := dest - src
+				| 0b110 => dest := dest ^ src
+				| 0b111 => Cmp(dest, src.SignExtend(dest.Size, size))
+				| _ => throw Exception(
+						"Unknown group 1 reg {0}" <- reg
+					)
+			}
+		}
+		
+		protected Group2(dest : Expr, src : Expr, reg : uint) : void {
+			match(reg) {
+				| 0b000 =>
+					dest := (dest << src) %| (dest >> (dest.Size - src))
+				
+				| 0b001 =>
+					dest := (dest >> src) %| (dest << (dest.Size - src))
+				
+				| 0b100 | 0b110 =>
+					dest := dest << src
+				| 0b101 => dest := dest >> src
+				| _ => throw Exception(
+						"Unknown group 2 reg {0}" <- reg
+					)
+			}
+		}
+		
+		protected Group3(dest : Expr, reg : uint) : void {
+			match(reg) {
+				| 0b000 | 0b001 =>
+					Test(
+						dest,
+						Num(
+							match(dest.Size) {
+								| 8 => NextInstByte()
+								| 16 => NextInstWord()
+								| _ => 0U
+							}
+						)
+					)
+				
+				| 0b011 =>
+					dest := -dest
+				
+				| 0b100 =>
+					match(dest.Size) {
+						| 8 =>
+							Mul(Ax, Al, dest)
+						| 16 =>
+							Temp("uint") := Num(0U);
+							def var = Temp("uint");
+							Mul(var, Ax, dest);
+							Dx := var >> 16;
+							Ax := var & 0xFFFFU
+						| _ => ()
+					}
+				
+				| 0b110 =>
+					match(dest.Size) {
+						| 8 =>
+							Temp("ushort", "left") := Ax / dest;
+							Temp("ushort", "right") := Ax % dest;
+							Al := Temp("ushort", "left")  :>> byte;
+							Ah := Temp("ushort", "right") :>> byte
+						| 16 =>
+							def left = ((Dx :>> uint) << 16) %| (Ax :>> uint);
+							Temp("uint", "left")  := left / (dest :>> uint);
+							Temp("uint", "right") := left % (dest :>> uint);
+							Ax := Temp("uint", "left" ) :>> ushort;
+							Dx := Temp("uint", "right") :>> ushort
+						| 32 =>
+							def left = ((Edx :>> ulong) << 32) %| (Eax :>> ulong);
+							Temp("ulong", "left")  := left / (dest :>> ulong);
+							Temp("ulong", "right") := left % (dest :>> ulong);
+							Eax := Temp("ulong", "left" ) :>> uint;
+							Edx := Temp("ulong", "right") :>> uint
+						| _ => ()
+					}
+				
+				| 0b111 =>
+					match(dest.Size) {
+						| 8 =>
+							Temp("short", "left") := Ax / dest;
+							Temp("short", "right") := Ax % dest;
+							Al := Temp("short", "left")  :>> byte;
+							Ah := Temp("short", "right") :>> byte
+						| 16 =>
+							def left = ((Dx :>> int) << 16) %| (Ax :>> int);
+							Temp("int", "left")  := left / (dest :>> int);
+							Temp("int", "right") := left % (dest :>> int);
+							Ax := Temp("int", "left" ) :>> ushort;
+							Dx := Temp("int", "right") :>> ushort
+						| 32 =>
+							def left = ((Edx :>> long) << 32) %| (Eax :>> long);
+							Temp("long", "left")  := left / (dest :>> long);
+							Temp("long", "right") := left % (dest :>> long);
+							Eax := Temp("long", "left" ) :>> uint;
+							Edx := Temp("long", "right") :>> uint
+						| _ => ()
+					}
+				
+				| _ => throw Exception(
+						"Unknown group 3 reg {0}" <- reg
+					)
+			}
+		}
+		
+		protected Group4(dest : Expr, reg : uint) : void {
+			match(reg) {
+				| 0b000 => dest := dest + 1
+				| 0b001 => dest := dest - 1
+				| _ => throw Exception(
+						"Unknown group 4 reg {0}" <- reg
+					)
+			}
+		}
+		
+		protected Group5(dest : Expr, reg : uint) : void {
+			match(reg) {
+				| 0b000 => dest := dest + 1
+				| 0b001 => dest := dest - 1
+				| 0b010 => 
+					Push(Num(PC), if(_32) 32 else 16);
+					Branch(dest)
+				| 0b011 =>
+					when(_32)
+						throw Exception("Call Mp from 32-bit code");
+					Push(Cs, 16);
+					Push(Num(PC), 16);
+					def (_, dest, _) = dest :> Memory;
+					Temp("uint") := dest;
+					Cs   := Mem16(Temp("uint") + Num(2));
+					Branch(Mem16(Temp("uint")))
+				| 0b110 => Push(dest)
+				| _ => throw Exception(
+						"Unknown group 5 reg {0}" <- reg
+					)
+			}
+		}
+		
+		protected Group10(dest : Expr, reg : uint) : void {
+			match(reg) {
+				| 0b000 => Pop(dest)
+				| _ => throw Exception(
+						"Unknown group 10 reg {0}" <- reg
+					)
+			}
+		}
+		
+		protected Group12(dest : Expr, src : Expr, reg : uint) : void {
+			match(reg) {
+				| 0b000 => dest := src
+				| _ => throw Exception(
+						"Unknown group 12 reg {0}" <- reg
+					)
+			}
+		}
+		
+		protected DefineGroupOpcodes() : void {
+			opcode group1(0x80, dest=Eb, src=Ib) {
+				Group1(dest, src, _reg, 8)
+			}
+			
+			opcode group1(0x81, dest=Ev, src=Iz) {
+				Group1(dest, src, _reg, if(_32) 32 else 16)
+			}
+			
+			opcode group1(0x83, dest=Ev, src=Ib) {
+				Group1(dest, src, _reg, 8)
+			}
+			
+			opcode group10(0x8F, dest=Ev) {
+				Group10(dest, _reg)
+			}
+			
+			opcode group2(0xC0, dest=Eb, src=Ib) {
+				Group2(dest, src, _reg)
+			}
+			
+			opcode group2(0xC1, dest=Ev, src=Ib) {
+				Group2(dest, src, _reg)
+			}
+			
+			opcode group12(0xC6, dest=Eb, src=Ib) {
+				Group12(dest, src, _reg)
+			}
+			
+			opcode group12(0xC7, dest=Ev, src=Iz) {
+				Group12(dest, src, _reg)
+			}
+			
+			opcode group2(0xD0, dest=Eb) {
+				Group2(dest, Num(1), _reg)
+			}
+			
+			opcode group2(0xD1, dest=Ev) {
+				Group2(dest, Num(1), _reg)
+			}
+			
+			opcode group2(0xD2, dest=Eb) {
+				Group2(dest, Cl, _reg)
+			}
+			
+			opcode group2(0xD3, dest=Ev) {
+				Group2(dest, Cl, _reg)
+			}
+			
+			opcode group3(0xF6, dest=Eb) {
+				Group3(dest, _reg)
+			}
+			
+			opcode group3(0xF7, dest=Ev) {
+				Group3(dest, _reg)
+			}
+			
+			opcode group4(0xFE, dest=Eb) {
+				Group4(dest, _reg)
+			}
+			
+			opcode group5(0xFF, dest=Ev) {
+				Group5(dest, _reg)
+			}
+		}
+	}
+}

@@ -1,0 +1,22 @@
+using System;
+using System.Threading;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.CoreSolo;
+
+namespace IronBabel.Box.Xbox.Kernel {
+	public partial class XboxKrnl {
+		xboxapi(0xBB) NtClose(
+			_CPU : CoreSolo,
+			Handle : uint
+		) : NtStatus {
+			print "NtClose(0x{0:X8}U)" <- Handle;
+			
+			NtStatus.Success
+		}
+	}
+}

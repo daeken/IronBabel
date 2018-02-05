@@ -1,0 +1,18 @@
+using System;
+
+using IronBabel.Box;
+using IronBabel.CPU;
+
+namespace IronBabel.Idb {
+	public module Run {
+		public Run [T](box : array [string] -> T, cpu : T -> BaseCPU, args : array [string]) : void {
+			if(args[0] == "-d") {
+				def dargs = array(args.Length-1);
+				Array.Copy(args, 1, dargs, 0, args.Length-1);
+				def box = box(dargs);
+				_ = Idb(box :> IBox, cpu(box))
+			} else 
+				(box(args) :> IBox).Start()
+		}
+	}
+}

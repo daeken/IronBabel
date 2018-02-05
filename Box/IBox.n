@@ -1,0 +1,13 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.Box {
+	public interface IBox {
+		Start() : void;
+		Shutdown() : void;
+		UpdateDisplay() : void;
+		Running : bool { get }
+	}
+}

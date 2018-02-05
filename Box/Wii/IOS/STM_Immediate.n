@@ -1,0 +1,12 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Device;
+using IronBabel.Misc;
+
+namespace IronBabel.Box.Wii {
+	public class STM_Immediate : IOSDevice {
+	}
+}

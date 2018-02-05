@@ -1,0 +1,40 @@
+using System;
+using System.Threading;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.CoreSolo;
+
+namespace IronBabel.Box.Xbox.Kernel {
+	public partial class XboxKrnl {
+		mutable Seg = 0;
+		
+		public SetupFS(CPU : CoreSolo) : void {
+			def addr = Allocate(CPU, 0x2000);
+			def tib = pointer.[uint](CPU.MMU, addr);
+			CPU.Gdt[Seg] = (addr, 0x1000U);
+			Seg++;
+			CPU._Fs = (Seg << 3) :> ushort;
+			
+			tib.Off[0x18U] = tib.Addr;
+			
+			def kthread = pointer.[uint](CPU.MMU, addr + 0x1000U);
+			tib.Off[0x28U] = kthread.Addr; // Current thread
+			tib.Off[0x2CU] = 0U; // Next thread
+			tib.Off[0x30U] = 0U; // Idle thread
+			def xtls = Box.CurXbe.Tls;
+			def datasize = xtls.DataEndAddr - xtls.DataStartAddr;
+			def tls = pointer.[uint](CPU.MMU, Allocate(CPU, datasize + xtls.ZeroFillSize));
+			def oldtls = pointer.[uint](CPU.MMU, xtls.DataStartAddr);
+			for(mutable i = 4U; i < datasize; i += 4)
+				tls.Off[i] = oldtls.Off[i];
+			for(mutable i = datasize; i < xtls.ZeroFillSize; i += 4)
+				tls.Off[i] = 0U;
+			kthread.Off[0x28U] = tls.Addr;
+			tls.Index[0U] = tls.Addr
+		}
+	}
+}

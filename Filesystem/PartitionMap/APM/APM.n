@@ -1,0 +1,74 @@
+using System;
+using System.Text;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Device.Drive;
+using IronBabel.Filesystem.HFSPlus;
+using IronBabel.Filesystem.PartitionMap;
+using IronBabel.Misc;
+
+namespace IronBabel.Filesystem.PartitionMap.APM {
+	public class APM : IPartitionMap {
+		mutable Drive : IDrive;
+		mutable PartCount : int;
+		public PartsByType : Hashtable [string, list [int]] = Hashtable();
+		private Parts : Hashtable [int, string * string * int * int] = Hashtable();
+		public this(Drive : IDrive) {
+			this.Drive = Drive;
+			
+			def (_, pm) = Drive.GetBlock(1);
+			unless(
+				pm[0] == 'P' :> byte &&
+				pm[1] == 'M' :> byte
+			)
+				throw Exception("Unknown partition map");
+			
+			PartCount = Swap(BitConverter.ToUInt32(pm, 4)) :> int;
+			assert(Swap(BitConverter.ToUInt32(pm, 8)) == 1U);
+			
+			for(mutable i : int = 1; i < PartCount; ++i) {
+				def (_, part) = Drive.GetBlock(1 + i);
+				
+				mutable nameSize = 0;
+				while(part[16+nameSize] != 0 && nameSize != 0x20)
+					nameSize++;
+				def pname = Encoding.GetEncoding(1251).GetString(part, 16, nameSize);
+				mutable typeSize = 0;
+				while(part[48+typeSize] != 0 && typeSize != 0x20)
+					typeSize++;
+				def ptype = Encoding.GetEncoding(1251).GetString(part, 48, typeSize);
+				def start = Swap(BitConverter.ToUInt32(part, 8)) :> int;
+				def size = Swap(BitConverter.ToUInt32(part, 12)) :> int;
+				Parts[i] = (ptype, pname, start, size);
+				
+				unless(PartsByType.ContainsKey(ptype))
+					PartsByType[ptype] = [];
+				
+				PartsByType[ptype] = i :: PartsByType[ptype]
+			}
+		}
+		
+		public Count : int {
+			get {
+				PartCount
+			}
+		}
+		
+		public GetPartition(num : int) : Partition {
+			def (ptype, name, start, size) = Parts[num];
+			Partition(
+				Drive,
+				name,
+				start,
+				size,
+				match(ptype) {
+					| "Apple_HFS" => HFSPlus(Drive, start, size)
+					| _ => null
+				}
+			)
+		}
+	}
+}

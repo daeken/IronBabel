@@ -1,0 +1,87 @@
+using System;
+using System.IO;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Device.Drive;
+
+namespace IronBabel.Device.Drive.ImageDrive {
+	public class ImageDrive : IDrive {
+		protected mutable _BlockSize : int = 2048;
+		public BlockSize : int {
+			get { _BlockSize }
+			set { _BlockSize = value }
+		}
+		
+		protected mutable _Size : long;
+		public Size : long {
+			get { _Size }
+			set { _Size = value }
+		}
+		
+		protected mutable _Cylinders : int = 0;
+		public Cylinders : int {
+			get { _Cylinders }
+			set { _Cylinders = value }
+		}
+		
+		protected mutable _Heads : int = 0;
+		public Heads : int {
+			get { _Heads }
+			set { _Heads = value }
+		}
+		
+		protected mutable _Sectors : int = 0;
+		public Sectors : int {
+			get { _Sectors }
+			set { _Sectors = value }
+		}
+		
+		mutable FStream : Stream;
+		
+		public Pos : long {
+			get {
+				FStream.Position
+			}
+			set {
+				FStream.Position = value
+			}
+		}
+		
+		public this(filename : string) {
+			FStream = File.OpenRead(filename)
+		}
+		
+		public Read(size : int) : (int * array [byte]) {
+			Read(size, array(size))
+		}
+		public Read(arr : array [byte]) : (int * array [byte]) {
+			Read(arr.Length, arr)
+		}
+		public Read(size : int, arr : array [byte]) : (int * array [byte]) {
+			Read(size, arr, 0U)
+		}
+		public Read(size : int, arr : array [byte], off : uint) : (int * array [byte]) {
+			(
+				FStream.Read(arr, off :> int, size),
+				arr
+			)
+		}
+		
+		public GetBlock(block : int) : (int * array [byte]) {
+			GetBlock(block, array(BlockSize))
+		}
+		public GetBlock(block : int, arr : array [byte]) : (int * array [byte]) {
+			Pos = (block * BlockSize) :> long;
+			Read(BlockSize, arr)
+		}
+		
+		public Write(_ : array [byte]) : int {
+			throw ReadOnlyDrive()
+		}
+		public Write(_ : int, _ : array [byte]) : int {
+			throw ReadOnlyDrive()
+		}
+	}
+}

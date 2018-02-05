@@ -1,0 +1,26 @@
+using System;
+using System.Threading;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Box.Xbox;
+using IronBabel.CPU;
+using IronBabel.CPU.CoreSolo;
+
+namespace IronBabel.Box.Xbox.Kernel {
+	public partial class XboxKrnl {
+		public enum NtStatus : uint {
+			| Success = 0
+		}
+		
+		public APIs : Hashtable [int, CoreSolo -> void] = Hashtable();
+		protected Box : Xbox;
+		
+		public this(Box : Xbox) {
+			this.Box = Box;
+			SetupAPIs()
+		}
+	}
+}

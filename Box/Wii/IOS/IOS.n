@@ -1,0 +1,158 @@
+using System;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.Device;
+using IronBabel.Misc;
+
+namespace IronBabel.Box.Wii {
+	public class IOSDevice {
+	}
+	
+	public class IOS {
+		protected variant IOSCommand {
+		}
+		
+		protected Queue : MessageQueue [IOSCommand] = MessageQueue();
+		protected Box : Wii;
+		
+		public this(Box : Wii) {
+			this.Box = Box;
+			Box.AddHWReg(0x0D000000U, 0x1000U, GetIOS, SetIOS);
+		}
+		
+		protected ReadCmd(buffer : uint, off : uint) : uint {
+			Box.CPU.MMU.Mem32[buffer + (off << 2), Box.CPU.PC]
+		}
+		
+		protected WriteCmd(buffer : uint, off : uint, value : uint) : void {
+			Box.CPU.MMU.Mem32[buffer + (off << 2), Box.CPU.PC] = value
+		}
+		
+		protected mutable CmdBuffer : uint;
+		protected mutable Status : uint;
+		protected mutable IntSet : bool;
+		protected mutable LastAddr : uint = 0U;
+		protected mutable LastPC : uint = 0U;
+		GetIOS(_CPU : BaseCPU, addr : uint, size : int, PC : uint) : object {
+			//unless(LastAddr == addr && LastPC == PC)
+			print "IOS get {0:X} from {1:X}" <- (addr, PC);
+			LastAddr = addr;
+			LastPC = PC;
+			
+			Resize(
+				match(addr) {
+					| 0x0D000004U => Status
+					| 0x0D000008U => CmdBuffer
+					| 0x0D000030U =>
+						if(IntSet)
+							0x40000000U
+						else
+							0U
+					| _ => 0U
+				},
+				size
+			)
+		}
+		SetIOS(_CPU : BaseCPU, addr : uint, value : object, size : int, PC : uint) : void {
+			def value = Unsize(value, size);
+			//unless(addr == 0x0D000030U)
+			print "IOS set {0:X} to {1:X} from {2:X}" <- (addr, value, PC);
+			
+			match(addr) {
+				| 0x0D000030U =>
+					if(value == 0x40000000U && IntSet)
+						IntSet = false
+					else
+						IntSet = true
+				| _ => 
+					match((addr - 0x0D000000U) >> 2) {
+						| 0U =>
+							CmdBuffer = value
+						| 1U =>
+							match(value & 0xFU) {
+								| 1U => // Send
+									HandleSend(PC)
+								| 0x2U => // Ack
+									Status = 0x14U;
+									Raise(PC)
+								
+								| 0x4U =>
+									Status = 0x30U
+								
+								| 0x8U =>
+									Status = 0x0U;
+									Raise(PC)
+								
+								| cmd =>
+									print "Unknown IOS command type {0:X}" <- cmd
+							}
+							
+						| reg =>
+							print "Unknown IOS reg {0}" <- reg
+					}
+			}
+		}
+		
+		Raise(addr : uint, trigger : bool = true) : void {
+			IntSet = true;
+			if(trigger)
+				Box.PI.IntCause |= 1U << 14; // IOS external interrupt
+			else
+				Box.PI.IntCause &= ~(1U << 14);
+			Box.CPU.RaiseExt(addr)
+		}
+		
+		HandleSend(addr : uint) : void {
+			match(ReadCmd(CmdBuffer, 0)) {
+				| 1U => // IOS_Open
+					def device = Box.CPU.MMU.GetString(
+						ReadCmd(CmdBuffer, 3U), 
+						0U
+					);
+					print "IOS_Open(\"{0}\")" <- device;
+					WriteCmd(CmdBuffer, 1U, IOS_Open(device));
+					WriteCmd(CmdBuffer, 2U, ReadCmd(CmdBuffer, 0U));
+					WriteCmd(CmdBuffer, 0U, 8U);
+					Status = 0x22U;
+					Raise(addr)
+				
+				| cmd =>
+					print "Unknown IOS command {0}" <- cmd;
+					throw Exception("Unknown IOS command")
+			}
+		}
+		
+		protected mutable fdCount : uint = 0U;
+		protected mutable fds : Hashtable [uint, IOSDevice] = Hashtable();
+		IOS_Open(device : string) : uint {
+			def deviceArr = device.Split(array ["/"], StringSplitOptions.None);
+			assert(deviceArr[0] == "");
+			assert(deviceArr[1] == "dev");
+			def device = match(deviceArr[2]) {
+				| "stm" =>
+					match(deviceArr[3]) {
+						| "immediate" =>
+							STM_Immediate()
+						| _ =>
+							print "Unknown IOS device {0}" <- device;
+							null
+					}
+				| _ =>
+					print "Unknown IOS device {0}" <- device;
+					null
+			}
+			
+			if(device == null)
+				0U
+			else {
+				fdCount++;
+				fds[fdCount] = device;
+				fdCount
+			}
+		}
+	}
+}

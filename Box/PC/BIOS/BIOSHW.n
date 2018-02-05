@@ -1,0 +1,24 @@
+using System;
+using System.IO;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.IA32;
+using IronBabel.Device.Drive;
+
+namespace IronBabel.Box.PC {
+	public partial class BIOS {
+		HWService(_ : IA32) : void {
+			mutable hw = 0U;
+			hw |= 0b00101111U;
+			hw |= 0b00000000U << 8;
+			hw |= 0b00000000U << 16;
+			hw |= 0b00000000U << 24;
+			
+			CPU._Eax = hw
+		}
+	}
+}

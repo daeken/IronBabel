@@ -1,0 +1,105 @@
+Getting started
+---------------
+
+1) Ensure you're running the latest version of .NET
+2) Install the latest version of Nemerle from http://nemerle.org/Main_Page
+3) Copy the Nemerle DLLs (except for the NAnt and MSBuild tasks) from the 
+	Nemerle directory to the GAC (%WINDOWS%\assembly)
+4) Install the latest version of SDL.NET from http://cs-sdl.sourceforge.net/
+5) Install the latest version of NAnt from http://nant.sourceforge.net/
+6) Copy the Nemerle NAnt Tasks DLL from the Nemerle directory to the NAnt directory
+7) Check Nextem out of SVN into a directory called 'Nextem', http://svn.assembla.com/svn/nextem/trunk/
+8) Go into the Nextem directory and run 'nant' to build
+9) Check IronBabel out of SVN into a directory beside Nextem, 
+   https://ironbabel.svn.sourceforge.net/svnroot/ironbabel/trunk
+10a) Go into the directory you checked this out into and run 'nant' to build the tree
+OR 10b) Go into the directory and run 'nant <PC|PowerMacG4|Wii|Xbox>' to build the box you want
+
+Running
+-------
+
+The way you run IB depends on the box you want to start:
+- PC -- Obj\PC.exe <floppy|cd|hdd> /path/to/image
+- PowerMac G4 -- Obj\PowerMacG4.exe /path/to/some.iso
+- Wii -- Obj\Wii.exe /path/to/some.iso
+- Xbox -- Obj\Xbox.exe /path/to/some.iso
+
+In addition, passing -d as the first argument enables the debugger, IDB.
+IDB commands:
+  - g -- Go
+  - c -- Continue from a breakpoint
+  - b <addr in hex> -- Add a breakpoint
+  - d <breakpoint num> -- Remove a breakpoint
+  - r -- Display registers
+  - ta -- Toggles displaying the address of all executed blocks
+
+Concepts
+--------
+
+- Boxes -- Define an emulation target.  These tie together components
+	(CPUs, MMUs, drives, etc) in the way the machine works and defines
+	the boot process.
+- CPUs -- These can be two types:
+	- An architecture class --
+		Defines base handlers for an instruction set.
+		An example of this would be a PPC/x86/MIPS/ARM base class that defines
+		the instructions common to all processors of this type.
+	- A specific processor --
+		Defines the specifics of a given processor.  This inherits from an 
+		architecture class and includes any instructions or oddities specific 
+		to a given processor.  An example of this would be a Pentium IV, which 
+		would inherit from the x86 architecture class.
+
+Source Tree Organization
+------------------------
+
+XXX: This is out of date
+
+/
+/IronBabel.build -- NAnt build file for the project
+/IronBabel.n -- Entrypoint for the project
+/Misc.n -- Random functions that are used throughout the project
+
+	/Box -- This is the root for Boxes
+	/Box/IBox.n -- This is the interface that all Boxes must implement
+
+	/CPU -- This is the root for all things CPU
+	/CPU/CPUMacros.n -- Contains the macros used by the CPUs
+	/CPU/BaseCPU.n -- This is the base class that all CPUs must inherit from,
+		explained in detail below
+	/CPU/BaseMMU.n -- Implements a 32-bit MMU
+	/CPU/Expr.n -- Contains the intermediary that the recompiler uses
+	
+	/Device -- Contains various device classes
+	
+		/Device/Drive -- Contains various drive interfaces
+		/Device/Drive/IDrive.n -- This is the interface that all drives must
+			implement
+	
+	/Filesystem -- Contains filesystem handlers
+	/Filesystem/IFilesystem.n -- This is the interface that all filesystems
+		must implement
+	
+		/PartitionMap -- Contains partition map handlers
+		/PartitionMap/IPartitionMap.n -- This contains the interface that all
+		partition maps must implement, as well as the Partition class.
+	
+	/Frontend -- Contains various IB frontends
+
+The source tree maps to the class tree.  A directory indicates a namespace
+(IronBabel being the root) and a file contains one or more classes/interfaces/
+modules/variants in that namespace.  E.g. The IronBabel.CPU.PPC7447.PPC7447
+class is located at /CPU/PPC7447/PPC7447.n.
+
+CPU Architecture
+----------------
+
+The separation of work on CPUs is as follows:
+	- BaseCPU -- Handles the base structure of recompilation (calling the
+		Translate() method, building code, compiling, executing), caching,
+		and definition of common CPU exceptions.
+	- Architecture -- Handles defining base instructions for the architecture
+		and features common to all processors of that class.
+	- Specific processor -- Handles defining the unique features
+		(unique model specific registers, instructions, cache details, etc)
+		of that specific processor.

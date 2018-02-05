@@ -1,0 +1,44 @@
+using System;
+using System.IO;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.IA32;
+using IronBabel.Device.Drive;
+
+namespace IronBabel.Box.PC {
+	public partial class BIOS {
+		MiscService(_ : IA32) : void {
+			match(CPU._Ah) {
+				| 0x41 =>
+					CPU._Ah = 0;
+					print "Wait on external event ignored"
+				
+				| 0xC0 =>
+					CPU._EFlags &= ~IA32.CF;
+					
+					def off = ((CPU._Es :> uint) << 4) + (CPU._Bx :> uint);
+					CPU.MMU.Mem16[off, CPU.PC] = 8 :> ushort;
+					CPU.MMU.Mem8[off+2U, CPU.PC] = 0xCA :> byte;
+					CPU.MMU.Mem8[off+3U, CPU.PC] = 0xFE :> byte;
+					CPU.MMU.Mem8[off+4U, CPU.PC] = 0 :> byte;
+					
+					CPU.MMU.Mem8[off+5U, CPU.PC] = 0 :> byte;
+					CPU.MMU.Mem8[off+6U, CPU.PC] = 0 :> byte;
+					CPU.MMU.Mem8[off+7U, CPU.PC] = 0 :> byte;
+					CPU.MMU.Mem8[off+8U, CPU.PC] = 0 :> byte;
+					CPU.MMU.Mem8[off+9U, CPU.PC] = 0 :> byte;
+					
+					CPU._Ah = 0U :> byte
+				
+				| vec =>
+					throw Exception(
+						"Unknown misc service vector {0:X}h" <- vec
+					)
+			}
+		}
+	}
+}

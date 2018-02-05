@@ -1,0 +1,20 @@
+using System;
+using System.IO;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Box;
+using IronBabel.CPU;
+
+namespace IronBabel.Box.PC {
+	public partial class PC : IBox {
+		protected InitPIC() : void {
+			CPU.AddPort(0x20U, null, PIC1Set);
+		}
+		
+		PIC1Set(value : uint, _size : uint) : void {
+			print "PIC1 set {0:X}" <- value
+		}
+	}
+}

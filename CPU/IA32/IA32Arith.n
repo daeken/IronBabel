@@ -1,0 +1,326 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel;
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.IA32;
+
+namespace IronBabel.CPU.IA32 {
+	public partial class IA32 : BaseCPU {
+		public Add(dest : uint, src : uint) : uint {
+			def temp = dest + src + (
+				if((_EFlags & CF) == CF)
+					1U
+				else
+					0U
+			);
+			_EFlags = Cmp(temp, 0U);
+			temp
+		}
+		
+		public Sub(dest : uint, src : uint) : uint {
+			def temp = dest + (
+				src + (
+				if((_EFlags & CF) == CF)
+					1U
+				else
+					0U
+				)
+			);
+			_EFlags = Cmp(temp, 0U);
+			temp
+		}
+		
+		protected Add(dest : Expr, src : Expr) : void {
+			dest := dest + src;
+			Cmp(dest, Num(0))
+		}
+		
+		protected Adc(dest : Expr, src : Expr) : void {
+			dest := dest ^+ src;
+			Cmp(dest, Num(0))
+		}
+		
+		protected Sub(dest : Expr, src : Expr) : void {
+			dest := dest - src;
+			Cmp(dest, Num(0))
+		}
+		
+		protected Sbb(dest : Expr, src : Expr) : void {
+			dest := dest ^- src;
+			Cmp(dest, Num(0))
+		}
+		
+		protected Mul(dest : Expr, left : Expr, right : Expr) : void {
+			def dtype = match(dest.Size) {
+				| 8 => "byte"
+				| 16 => "ushort"
+				| 32 => "uint"
+				| _ => ""
+			}
+			dest := Cast(left, dtype) * Cast(right, dtype);
+			Cmp(dest, Num(0))
+		}
+		
+		protected And(dest : Expr, src : Expr) : void {
+			dest := dest & src;
+			Cmp(dest, Num(0))
+		}
+		
+		protected Or(dest : Expr, src : Expr) : void {
+			dest := dest | src;
+			Cmp(dest, Num(0))
+		}
+		
+		protected Xor(dest : Expr, src : Expr) : void {
+			dest := dest ^ src;
+			Cmp(dest, Num(0))
+		}
+		
+		protected Shrd(dest : Expr, src : Expr, count : Expr) : void {
+			dest := (
+				src << (
+					if(_32)
+						32 - count
+					else
+						16 - count
+				)
+			) | (dest >> count);
+			Cmp(dest, Num(0))
+		}
+		
+		protected DefineArithOpcodes() : void {
+			opcode add(0x00, dest=Eb, src=Gb) {
+				Add(dest, src)
+			}
+			
+			opcode add(0x01, dest=Ev, src=Gv) {
+				Add(dest, src)
+			}
+			
+			opcode add(0x02, dest=Gb, src=Eb) {
+				Add(dest, src)
+			}
+			
+			opcode add(0x03, dest=Gv, src=Ev) {
+				Add(dest, src)
+			}
+			
+			opcode add(0x04, src=Ib) {
+				Add(Al, src)
+			}
+			
+			opcode add(0x05, src=Iz) {
+				Add(VAx, src)
+			}
+			
+			opcode or(0x08, dest=Eb, src=Gb) {
+				Or(dest, src)
+			}
+			
+			opcode or(0x09, dest=Ev, src=Gv) {
+				Or(dest, src)
+			}
+			
+			opcode or(0x0A, dest=Gb, src=Eb) {
+				Or(dest, src)
+			}
+			
+			opcode or(0x0B, dest=Gv, src=Ev) {
+				Or(dest, src)
+			}
+			
+			opcode or(0x0C, src=Ib) {
+				Or(Al, src)
+			}
+			
+			opcode or(0x0D, src=Iz) {
+				Or(VAx, src)
+			}
+			
+			opcode adc(0x11, dest=Ev, src=Gv) {
+				Adc(dest, src)
+			}
+			
+			opcode adc(0x13, dest=Gv, src=Ev) {
+				Adc(dest, src)
+			}
+			
+			opcode adc(0x15, src=Iz) {
+				Adc(VAx, src)
+			}
+			
+			opcode sbb(0x19, dest=Gv, src=Ev) {
+				Sbb(dest, src)
+			}
+			
+			opcode and_(0x20, dest=Eb, src=Gb) {
+				And(dest, src)
+			}
+			
+			opcode and_(0x21, dest=Ev, src=Gv) {
+				And(dest, src)
+			}
+			
+			opcode and_(0x22, dest=Gb, src=Eb) {
+				And(dest, src)
+			}
+			
+			opcode and_(0x23, dest=Gv, src=Ev) {
+				And(dest, src)
+			}
+			
+			opcode and_(0x24, src=Ib) {
+				And(Al, src)
+			}
+			
+			opcode and_(0x25, src=Iz) {
+				And(VAx, src)
+			}
+			
+			opcode sub(0x28, dest=Eb, src=Gb) {
+				Sub(dest, src)
+			}
+			
+			opcode sub(0x29, dest=Ev, src=Gv) {
+				Sub(dest, src)
+			}
+			
+			opcode sub(0x2A, dest=Gb, src=Eb) {
+				Sub(dest, src)
+			}
+			
+			opcode sub(0x2B, dest=Gv, src=Ev) {
+				Sub(dest, src)
+			}
+			
+			opcode sub(0x2C, src=Ib) {
+				Sub(Al, src)
+			}
+			
+			opcode sub(0x2D, src=Iz) {
+				Sub(VAx, src)
+			}
+			
+			opcode xor(0x30, dest=Eb, src=Gb) {
+				Xor(dest, src)
+			}
+			
+			opcode xor(0x31, dest=Ev, src=Gv) {
+				Xor(dest, src)
+			}
+			
+			opcode xor(0x32, dest=Gb, src=Eb) {
+				Xor(dest, src)
+			}
+			
+			opcode xor(0x33, dest=Gv, src=Ev) {
+				Xor(dest, src)
+			}
+			
+			opcode xor(0x34, src=Ib) {
+				Xor(Al, src)
+			}
+			
+			opcode xor(0x35, src=Iz) {
+				Xor(VAx, src)
+			}
+			
+			opcode aas(0x3F) {
+				Emit(
+					If(
+						(
+							((Al & 0x0FU) > 9U) |||
+							((EFlags & AF) != 0U)
+						),
+						Eval(
+							quoteblock {
+								Al := Al - 6;
+								Ah := Ah - 1;
+								EFlags := EFlags | CF | AF
+							}
+						),
+						Eval(
+							quoteblock {
+								EFlags := EFlags & ~(CF | AF)
+							}
+						)
+					)
+				);
+				Al := Al & 0x0FU
+			}
+			
+			opcode inc(0x40) {
+				Add(VAx, Num(1))
+			}
+			
+			opcode inc(0x41) {
+				Add(VCx, Num(1))
+			}
+			
+			opcode inc(0x42) {
+				Add(VDx, Num(1))
+			}
+			
+			opcode inc(0x43) {
+				Add(VBx, Num(1))
+			}
+			
+			opcode inc(0x44) {
+				Add(VSp, Num(1))
+			}
+			
+			opcode inc(0x45) {
+				Add(VBp, Num(1))
+			}
+			
+			opcode inc(0x46) {
+				Add(VSi, Num(1))
+			}
+			
+			opcode inc(0x47) {
+				Add(VDi, Num(1))
+			}
+			
+			opcode dec(0x48) {
+				Sub(VAx, Num(1))
+			}
+			
+			opcode dec(0x49) {
+				Sub(VCx, Num(1))
+			}
+			
+			opcode dec(0x4A) {
+				Sub(VDx, Num(1))
+			}
+			
+			opcode dec(0x4B) {
+				Sub(VBx, Num(1))
+			}
+			
+			opcode dec(0x4C) {
+				Sub(VSp, Num(1))
+			}
+			
+			opcode dec(0x4D) {
+				Sub(VBp, Num(1))
+			}
+			
+			opcode dec(0x4E) {
+				Sub(VSi, Num(1))
+			}
+			
+			opcode dec(0x4F) {
+				Sub(VDi, Num(1))
+			}
+			
+			opcode shrd(0x0FAD, dest=Ev, src=Gv) {
+				Shrd(dest, src, Cl)
+			}
+		}
+	}
+}

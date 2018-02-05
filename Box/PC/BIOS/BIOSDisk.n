@@ -1,0 +1,166 @@
+using System;
+using System.IO;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.IA32;
+using IronBabel.Device.Drive;
+
+namespace IronBabel.Box.PC {
+	public enum DriveClass {
+		| None
+		| Floppy
+		| HDD
+		| CD
+	}
+	
+	public partial class BIOS {
+		protected Drives : Hashtable [int, DriveClass * IDrive] = Hashtable();
+		
+		public AddDrive(id : int, dclass : DriveClass, drive : IDrive) : void {
+			Drives[id] = (dclass, drive)
+		}
+		
+		DiskService(_ : IA32) : void {
+			match(CPU._Ah) {
+				| 0x00 => // Reset disk system
+					CPU._EFlags &= ~IA32.CF;
+					CPU._Ah = 0 :> byte
+				
+				| 0x02 => // Read sectors
+					def drive = CPU._Dl :> int;
+					
+					if(Drives.ContainsKey(drive) && CPU._Al > 0) {
+						CPU._EFlags &= ~IA32.CF;
+						CPU._Ah = 0;
+						
+						def drive = Drives[drive][1];
+						def cx = CPU._Cx :> int;
+						def cyl = ((cx << 2) & 0x300) %| (cx >> 8);
+						def sector = cx & 0x3F;
+						def start = (
+							cyl * drive.Heads + (CPU._Dh :> int)
+						) * drive.Sectors + sector - 1;
+						
+						print "Read sectors:";
+						print "\tStart: {0} ({1} {2} {3})" <- (start, cyl, CPU._Dh, sector);
+						print "\tCount: {0}" <- CPU._Al;
+						print "\tBuffer: {0:X}" <- ((CPU._Es :> uint) << 4) + (CPU._Bx :> uint);
+						
+						drive.Pos = start * drive.BlockSize;
+						
+						def buf = array((CPU._Al :> int) * drive.BlockSize);
+						_ = drive.Read(
+							(CPU._Al :> int) * drive.BlockSize,
+							buf,
+							0U
+						);
+						CPU.MMU.SetPhysBytes(((CPU._Es :> uint) << 4) + (CPU._Bx :> uint), buf, 0U)
+					} else {
+						CPU._EFlags |= IA32.CF;
+						CPU._Ah = 1;
+						CPU._Al = 0
+					}
+				
+				| 0x08 => // Get drive parameters
+					def id = CPU._Dl :> int;
+					
+					if(Drives.ContainsKey(id)) {
+						CPU._EFlags &= ~IA32.CF;
+						def (dclass, drive) = Drives[id];
+						CPU._Ah = 0;
+						CPU._Al = 0;
+						
+						when(dclass == DriveClass.Floppy)
+							CPU._Bl = 0x04; // 1.44MB floppy
+						
+						CPU._Ch = ((drive.Cylinders - 1) & 0xFF) :> byte;
+						CPU._Cl = ((drive.Sectors / drive.Heads) | (((drive.Cylinders - 1) >> 2) & 0xC0)) :> byte;
+						CPU._Dh = (drive.Heads - 1) :> byte;
+						CPU._Dl = 0 :> byte;
+						foreach((sid, _) in Drives.KeyValuePairs)
+							when((sid & 0x80) == (id & 0x80))
+								CPU._Dl = (CPU._Dl + 1) :> byte;
+						
+						CPU._Es = 0xF000U :> ushort;
+						CPU._Di = (id << 4) :> ushort;
+						
+						def addr = ((CPU._Es :> uint) << 4) + (CPU._Di :> uint);
+						CPU.MMU.Mem8[addr, CPU.PC] = 0 :> byte;
+						CPU.MMU.Mem8[addr+0x1U, CPU.PC] = 0 :> byte;
+						CPU.MMU.Mem8[addr+0x2U, CPU.PC] = 1 :> byte;
+						CPU.MMU.Mem8[addr+0x3U, CPU.PC] = 2 :> byte; // Bytes per sector == 512
+						CPU.MMU.Mem8[addr+0x4U, CPU.PC] = drive.Sectors :> byte;
+						CPU.MMU.Mem8[addr+0x5U, CPU.PC] = 0x1B :> byte;
+						CPU.MMU.Mem8[addr+0x6U, CPU.PC] = 0 :> byte;
+						CPU.MMU.Mem8[addr+0x7U, CPU.PC] = 0x6C :> byte;
+						CPU.MMU.Mem8[addr+0x8U, CPU.PC] = 0 :> byte;
+						CPU.MMU.Mem8[addr+0x9U, CPU.PC] = 0 :> byte;
+						CPU.MMU.Mem8[addr+0xAU, CPU.PC] = 0 :> byte
+					} else {
+						CPU._EFlags |= IA32.CF;
+						CPU._Ah = 0x07
+					}
+				
+				| 0x15 => // Get disk type
+					def drive = CPU._Dl :> int;
+					
+					if(Drives.ContainsKey(drive)) {
+						CPU._EFlags &= ~IA32.CF;
+						def (dclass, drive) = Drives[drive];
+						CPU._Ah = (match(dclass) {
+							| HDD =>
+								def sectors = (drive.Size >> 9) :> uint;
+								
+								CPU._Dx = (sectors & 0xFFFFU) :> ushort;
+								CPU._Cx = (sectors >> 16    ) :> ushort;
+								
+								0x03
+							| _ => 0x02
+						}) :> byte
+					} else {
+						CPU._EFlags |= IA32.CF;
+						CPU._Ah = 1
+					}
+				
+				| 0x42 => // Extended read sectors
+					def DAP = ((CPU._Ds << 4) + CPU._Si) :> uint;
+					def drive   = CPU._Dl :> int;
+					def count   = CPU.MMU.Mem8 [DAP+2, CPU.PC] :> int;
+					def offset  = CPU.MMU.Mem16[DAP+4, CPU.PC] :> uint;
+					def segment = CPU.MMU.Mem16[DAP+6, CPU.PC] :> uint;
+					def buffer  = (segment << 4) + offset;
+					def start   = CPU.MMU.Mem64[DAP+8, CPU.PC] :> int;
+					
+					if(Drives.ContainsKey(drive) && count > 0) {
+						CPU._EFlags &= ~IA32.CF;
+						CPU._Ah = 0;
+						
+						def drive = Drives[drive][1];
+						drive.Pos = start * drive.BlockSize;
+						
+						def buf = array(count * drive.BlockSize);
+						_ = drive.Read(
+							count * drive.BlockSize,
+							buf,
+							0U
+						);
+						CPU.MMU.SetPhysBytes(buffer, buf, 0U)
+					} else {
+						CPU._EFlags |= IA32.CF;
+						CPU._Ah = 1; // Invalid parameter (drive type)
+						
+						CPU.MMU.Mem8[DAP+2, CPU.PC] = 0; // Zero out the count
+					}
+				
+				| vec =>
+					throw Exception(
+						"Unknown disk service vector {0:X}h" <- vec
+					)
+			}
+		}
+	}
+}

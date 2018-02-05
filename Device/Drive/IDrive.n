@@ -1,0 +1,45 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.Device.Drive {
+	public class ReadOnlyDrive : Exception {}
+	
+	public interface IDrive {
+		BlockSize : int {
+			get;
+			set;
+		}
+		Size : long {
+			get;
+			set;
+		}
+		Pos : long {
+			get;
+			set;
+		}
+		Cylinders : int {
+			get;
+			set;
+		}
+		Heads : int {
+			get;
+			set;
+		}
+		Sectors : int {
+			get;
+			set;
+		}
+		Read(size : int) : (int * array [byte]);
+		Read(arr : array [byte]) : (int * array [byte]);
+		Read(size : int, arr : array [byte]) : (int * array [byte]);
+		Read(size : int, arr : array [byte], off : uint) : (int * array [byte]);
+		
+		GetBlock(block : int) : (int * array [byte]);
+		GetBlock(block : int, arr : array [byte]) : (int * array [byte]);
+		
+		Write(arr : array [byte]) : int;
+		Write(size : int, arr : array [byte]) : int;
+	}
+}

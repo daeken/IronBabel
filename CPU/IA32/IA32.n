@@ -1,0 +1,415 @@
+using System;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel;
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.IA32;
+
+namespace IronBabel.CPU.IA32 {
+	[Record]
+	public class IA32Opcode {
+		public Opcd : uint;
+		public Mnem : string;
+		public Handler : void -> void;
+	}
+	
+	public partial class IA32 : BaseCPU {
+		protected Opcodes : Hashtable [uint, IA32Opcode] = Hashtable();
+		
+		public mutable _32 : bool = false;
+		
+		register Cs : ushort;
+		register Ds : ushort;
+		register Es : ushort;
+		register Fs : ushort;
+		register Gs : ushort;
+		register Ss : ushort;
+		
+		register EFlags : uint;
+		subregister(EFlags) Flags : ushort;
+		varregister(EFlags, Flags) VFlags;
+		
+		register Eax : uint;
+		register Ebx : uint;
+		register Ecx : uint;
+		register Edx : uint;
+		register Edi : uint;
+		register Esi : uint;
+		register Ebp : uint;
+		register Esp : uint;
+		
+		subregister(Eax) Ax : ushort;
+		subregister(Ebx) Bx : ushort;
+		subregister(Ecx) Cx : ushort;
+		subregister(Edx) Dx : ushort;
+		subregister(Edi) Di : ushort;
+		subregister(Esi) Si : ushort;
+		subregister(Ebp) Bp : ushort;
+		subregister(Esp) Sp : ushort;
+		
+		subregister(Eax, 8) Ah : byte;
+		subregister(Ebx, 8) Bh : byte;
+		subregister(Ecx, 8) Ch : byte;
+		subregister(Edx, 8) Dh : byte;
+		
+		subregister(Eax) Al : byte;
+		subregister(Ebx) Bl : byte;
+		subregister(Ecx) Cl : byte;
+		subregister(Edx) Dl : byte;
+		
+		varregister(Eax, Ax) VAx;
+		varregister(Ebx, Bx) VBx;
+		varregister(Ecx, Cx) VCx;
+		varregister(Edx, Dx) VDx;
+		varregister(Edi, Di) VDi;
+		varregister(Esi, Si) VSi;
+		varregister(Ebp, Bp) VBp;
+		varregister(Esp, Sp) VSp;
+		
+		public Gdt : array [uint * uint] = array(8192);
+		
+		protected mutable Reverse : bool = false;
+		
+		protected mutable CurSeg : Expr;
+		protected mutable CurRep : int;
+		
+		public override CachePC : uint {
+			get {
+				if(_32)
+					PC
+				else
+					((_Cs :> uint) << 4) + PC
+			}
+		}
+		
+		public this() {
+			base();
+			CPUType = "IA32";
+			_ = CompilerParams.ReferencedAssemblies.Add(ObjPath + "IronBabel.CPU.IA32.dll");
+			Using = "IronBabel.CPU.IA32" :: Using;
+			
+			Verbose = true;
+			
+			DefineOpcodes()
+		}
+		
+		protected NextInstByte() : uint {
+			def inst = MMU.Mem8[CachePC, PC] :> uint;
+			++PC;
+			inst
+		}
+		protected NextInstWord() : uint {
+			def inst = MMU.Mem16[CachePC, PC] :> uint;
+			PC += 2;
+			inst
+		}
+		protected NextInstDword() : uint {
+			def inst = MMU.Mem32[CachePC, PC];
+			PC += 4;
+			inst
+		}
+		
+		protected override Translate() : void {
+			CurSeg = Ds;
+			CurRep = 0;
+			
+			mutable cur : uint = NextInstByte();
+			
+			def Seg(seg) {
+				CurSeg = seg;
+				true
+			}
+			
+			while(
+				match(cur) {
+					| 0x26 => Seg(Es)
+					| 0x36 => Seg(Ss)
+					| 0x64 => Seg(Fs)
+					| 0x65 => Seg(Gs)
+					| 0x2E => Seg(Cs)
+					| 0x3E => Seg(Ds)
+					| 0x66 | 0x67 | 0xF0 =>
+						true
+					| 0xF2 =>
+						CurRep = -1;
+						true
+					| 0xF3 =>
+						CurRep = 1;
+						true
+					| _ => false
+				}
+			)
+				cur = NextInstByte();
+			
+			when(cur == 0x0FU)
+				cur = 0x0F00U | NextInstByte();
+			
+			def opcd = {
+				if(Opcodes.ContainsKey(cur))
+					Opcodes[cur]
+				else
+					throw Exception(
+						"Unknown opcode {0:X} at ~{1:X8}" <- (cur, PC)
+					)
+			}
+			
+			opcd.Handler()
+		}
+		
+		public override TranslateAddress(addr : Expr) : Expr {
+			Call(CPU.TranslateAddress(CurSeg, addr))
+		}
+		
+		public TranslateAddress(seg : ushort, addr : uint) : uint {
+			def seg = seg :> int;
+			def gdt = (seg & 4) == 0;
+			def seg = seg >> 3;
+			if(seg == 0) addr
+			else {
+				unless(gdt) throw Exception("LDT not supported");
+				// I know, I know, this is dirty.
+				def (baseaddr, _limit) = Gdt[seg - 1];
+				baseaddr + addr
+			}
+		}
+		
+		protected Opcode(opcd : uint, mnem : string, handler : void -> void) : void {
+			Opcodes[opcd] = IA32Opcode(
+				opcd,
+				mnem,
+				handler
+			)
+		}
+		
+		protected ParseModRM() : uint * uint * uint {
+			def inst = NextInstByte();
+			(
+				inst >> 6,
+				(inst >> 3) & 0b111,
+				 inst       & 0b111
+			)
+		}
+		
+		protected CalcSize(size : char) : int {
+			| 'b' => 1
+			| 'w' => 2
+			| 'v' | 'z' => if(_32) 4 else 2
+			| _ => throw Exception(
+					"Unknown size {0}" <- size
+				)
+		}
+		
+		protected ParseMod(mod : uint, rm : uint, size : int) : Expr {
+			def ParseRm16(rm : uint) {
+				| 0b000 => Bx + Si | 0b001 => Bx + Di
+				| 0b010 => Bp + Si | 0b011 => Bp + Di
+				| 0b100 => Si      | 0b101 => Di
+				| 0b110 => Bp      | 0b111 => Bx
+				| _ => null
+			}
+			
+			def ParseSib(mod : uint) {
+				def (s, i, b) = ParseModRM();
+				
+				def s = Num(1U << (s :> int));
+				
+				def i = 
+					if(i == 0b100) Num(0U)
+					else ParseReg(i, 4);
+				
+				def b = 
+					if(b == 0b101)
+						match(mod) {
+							| 0b00 => Num(NextInstDword())
+							| 0b01 => Ebp + NextInstByte()
+							| 0b10 => Ebp + NextInstDword()
+							| _ => null
+						}
+					else ParseReg(b, 4);
+				
+				i * s + b
+			}
+			
+			if(_32)
+				match(mod) {
+					| 0b11 =>
+						ParseReg(rm, size)
+					| _ =>
+						def baseaddr = 
+							match(rm) {
+								| 0b100 => ParseSib(mod)
+								| _ => ParseReg(rm, 4)
+							}
+						Mem(
+							size << 3,
+							match(mod) {
+								| 0b00 =>
+									match(rm) {
+										| 0b101 => Sign(NextInstDword(), 32)
+										| _ => baseaddr
+									}
+								| 0b01 =>
+									baseaddr + Sign(NextInstByte(), 8)
+								| 0b10 => 
+									baseaddr + Sign(NextInstDword(), 32)
+								| _ => null
+							}
+						)
+				}
+			else
+				match(mod) {
+					| 0b11 =>
+						ParseReg(rm, size)
+					| _ =>
+						match(rm) {
+							| 0b010 | 0b011 | 0b110 =>
+								unless(mod == 0b00 && rm == 0b110)
+									CurSeg = Ss
+							| _ => ()
+						}
+						
+						Mem(
+							size << 3,
+							((CurSeg :>> uint) << 4) + (
+								match(mod) {
+									| 0b00 =>
+										match(rm) {
+											| 0b110 => Sign(NextInstWord(), 16)
+											| rm => ParseRm16(rm)
+										}
+									| 0b01 =>
+										ParseRm16(rm) + Sign(NextInstByte(), 8)
+									| 0b10 =>
+										ParseRm16(rm) + Sign(NextInstWord(), 16)
+									| _ => null
+								} :>> uint
+							)
+						)
+				}
+		}
+		
+		protected ParseReg(reg : uint, size : int) : Expr {
+			match(size) {
+				| 1 =>
+					match(reg) {
+						| 0b000 => Al | 0b001 => Cl
+						| 0b010 => Dl | 0b011 => Bl
+						| 0b100 => Ah | 0b101 => Ch
+						| 0b110 => Dh | 0b111 => Bh
+						| _ => null
+					}
+				| 2 =>
+					match(reg) {
+						| 0b000 => Ax | 0b001 => Cx
+						| 0b010 => Dx | 0b011 => Bx
+						| 0b100 => Sp | 0b101 => Bp
+						| 0b110 => Si | 0b111 => Di
+						| _ => null
+					}
+				| 4 =>
+					match(reg) {
+						| 0b000 => Eax | 0b001 => Ecx
+						| 0b010 => Edx | 0b011 => Ebx
+						| 0b100 => Esp | 0b101 => Ebp
+						| 0b110 => Esi | 0b111 => Edi
+						| _ => null
+					}
+				| _ => null
+			}
+		}
+		
+		protected ParseSeg(reg : uint) : Expr {
+			| 0b000 => Es | 0b001 => Cs
+			| 0b010 => Ss | 0b011 => Ds
+			| 0b100 => Fs | 0b101 => Gs
+			| _ => null
+		}
+		
+		protected RepCx(func : void -> void) : void {
+			if(CurRep == 0) func()
+			else
+				Emit(
+					While(
+						VCx > 0,
+						Eval(
+							quoteblock {
+								VCx := VCx - 1;
+								func()
+							}
+						)
+					)
+				)
+		}
+		
+		protected RepCxZf(func : void -> void) : void {
+			if(CurRep == 0) func()
+			else
+				RepCx(
+					quoteblock {
+						func();
+						Emit(
+							If(
+								(
+									if(CurRep == -1)
+										(EFlags & ZF) != 0U // NE
+									else
+										(EFlags & ZF) == 0U // EQ
+								),
+								Break(),
+								null
+							)
+						)
+					}
+				)
+		}
+		
+		public override Debug(_PC : uint) : void {
+			print "\tEip: {0:X8}" <- _PC;
+			print "\tEax: {0:X8}" <- _Eax;
+			print "\tEbx: {0:X8}" <- _Ebx;
+			print "\tEcx: {0:X8}" <- _Ecx;
+			print "\tEdx: {0:X8}" <- _Edx;
+			print "\tEbp: {0:X8}" <- _Ebp;
+			print "\tEsp: {0:X8}" <- _Esp;
+			print "\tEdi: {0:X8}" <- _Edi;
+			print "\tEsi: {0:X8}" <- _Esi;
+			print "";
+			print "\tCs: {0:X4}" <- _Cs;
+			print "\tDs: {0:X4}" <- _Ds;
+			print "\tEs: {0:X4}" <- _Es;
+			print "\tFs: {0:X4}" <- _Fs;
+			print "\tGs: {0:X4}" <- _Gs;
+			print "\tSs: {0:X4}" <- _Ss;
+			print
+		}
+		
+		public DumpMSDos() : void {
+			Emit(Call(CPU.DumpMSDos(0U)))
+		}
+		
+		public DumpMSDos(_ : uint) : void {
+			MMU.Dump(0x907A0U, 65536U, "dosshit.bin")
+		}
+		
+		protected virtual DefineOpcodes() : void {
+			DefineArithOpcodes();
+			DefineBranchOpcodes();
+			DefineCompareOpcodes();
+			DefineGroupOpcodes();
+			DefineInterruptOpcodes();
+			DefineIOOpcodes();
+			DefineStackMoveOpcodes();
+			
+			opcode nop(0x90) {}
+			
+			opcode cld(0xFC) {
+				Reverse = false
+			}
+		}
+	}
+}

@@ -1,0 +1,75 @@
+using System;
+using System.IO;
+using System.Math;
+
+using Nextem;
+using Nextem.Conversion;
+using Nextem.Stream;
+using Nextem.String;
+using Nextem.Struct;
+
+public module FatxUnpack {
+	[Binary]
+	public struct FSHeader {
+		[ArraySize(20)]
+		Magic : array [byte];
+		RootSector : uint;
+		RootSize : int;
+		[ArraySize(20)]
+		FileTime : array [uint];
+		[ArraySize(0x7C8)]
+		Unused : array [byte];
+		[ArraySize(20)]
+		Magic2 : array [byte]
+	}
+	
+	[Binary]
+	public struct DirEntry {
+		LeftTree : ushort;
+		RightTree : ushort;
+		Sector : uint;
+		Size : int;
+		Attrib : byte;
+		NameLen : byte;
+		[ArraySize(NameLen :> int)]
+		Name : array [byte]
+	}
+	
+	public Main(args : array [string]) : void {
+		def fp = File.OpenRead(args[0]);
+		fp.Position = 2048L * 32L;
+		def header = FSHeader(fp);
+		
+		def recurse(sector, pos, dirname) {
+			_ = Directory.CreateDirectory(dirname);
+			
+			fp.Position = 2048L * sector + pos;
+			def dir = DirEntry(fp);
+			def name = BytesToString(dir.Name);
+			
+			if(dir.Attrib & 0x10 == 0x10)
+				recurse(dir.Sector, 0, dirname + "/" + name)
+			else {
+				fp.Position = 2048L * (dir.Sector :> long);
+				def name = dirname + "/" + name;
+				print name;
+				def fp2 = File.OpenWrite(name);
+				
+				while(dir.Size > 0) {
+					def data = fp.ReadBytes(Min(4096, dir.Size));
+					fp2.Write(data);
+					dir.Size -= data.Length
+				}
+				
+				fp2.Close()
+			}
+			
+			unless(dir.LeftTree == 0)
+				recurse(sector, dir.LeftTree * 4, dirname);
+			unless(dir.RightTree == 0)
+				recurse(sector, dir.RightTree * 4, dirname)
+		}
+		
+		recurse(header.RootSector, 0, args[1])
+	}
+}

@@ -1,0 +1,31 @@
+using System;
+using System.Collections;
+using System.Threading;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.Device {
+	public class MessageQueue [T] {
+		protected Mutex : Mutex = Mutex();
+		protected Queue : Queue = Queue();
+		
+		protected Push(msg : T) : void {
+			_ = Mutex.WaitOne();
+			Queue.Enqueue(msg);
+			Mutex.ReleaseMutex()
+		}
+		
+		protected Pop() : T {
+			_ = Mutex.WaitOne();
+			def temp = try {
+				Queue.Dequeue()
+			} catch {
+				| _ is InvalidOperationException =>
+					null
+			}
+			Mutex.ReleaseMutex();
+			temp :> T
+		}
+	}
+}

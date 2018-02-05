@@ -1,0 +1,102 @@
+using System;
+using System.IO;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.IA32;
+using IronBabel.Device.Drive;
+
+namespace IronBabel.Box.PC {
+	public partial class BIOS {
+		public Boot() : void {
+			def BootCD(drive : IDrive, id : int) {
+				def bootRecord = drive.GetBlock(17)[1];
+				unless(
+					System.Text.ASCIIEncoding()
+						.GetString(bootRecord, 1, 5) ==
+					"CD001"
+				)
+					return false;
+				
+				def bootCatalog = BitConverter.ToInt32(bootRecord, 0x47);
+				def bootCatalog = drive.GetBlock(bootCatalog)[1];
+				
+				unless(
+					bootCatalog[0x1E] == 0x55 :> byte &&
+					bootCatalog[0x1F] == 0xAA :> byte
+				)
+					return false;
+				
+				def loadSegment = match(BitConverter.ToUInt16(bootCatalog, 0x22)) {
+					| 0 => 0x7C0 : ushort
+					| x => x
+				}
+				def loadSectors = BitConverter.ToUInt16(bootCatalog, 0x26);
+				def loadRBA = BitConverter.ToInt32(bootCatalog, 0x28);
+				
+				drive.Pos = loadRBA * drive.BlockSize;
+				def buf = array(loadSectors * drive.BlockSize);
+				
+				_ = drive.Read(
+					loadSectors * drive.BlockSize, 
+					buf, 
+					0U
+				);
+				CPU.MMU.SetPhysBytes((loadSegment :> uint) << 4, buf, 0U);
+				
+				CPU._Dx = id :> ushort;
+				CPU._Cs = loadSegment;
+				
+				true
+			}
+			
+			def BootOther(drive : IDrive, id : int) {
+				def testbuf = array(2);
+				drive.Pos = 510;
+				_ = drive.Read(
+					2,
+					testbuf,
+					0
+				);
+				
+				unless(
+					testbuf[0] == 0x55 :> byte &&
+					testbuf[1] == 0xAA :> byte
+				)
+					return false;
+				
+				drive.Pos = 0;
+				def buf = array(drive.BlockSize);
+				_ = drive.Read(
+					drive.BlockSize, 
+					buf, 
+					0U
+				);
+				CPU.MMU.SetPhysBytes(0x7C00U, buf, 0U);
+				
+				CPU._Dx = id :> ushort;
+				CPU._Cs = 0x7C0U :> ushort;
+				
+				true
+			}
+			
+			foreach((id, (dclass, drive)) in Drives.KeyValuePairs)
+				when(
+					match(dclass) {
+						| Floppy | HDD =>
+							BootOther(drive, id)
+						
+						| CD =>
+							BootCD(drive, id)
+						| _ =>
+							false
+					}
+				)
+					break
+		}
+	}
+}

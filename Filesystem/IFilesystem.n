@@ -1,0 +1,12 @@
+using System;
+using System.IO;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.Filesystem {
+	public interface IFilesystem {
+		List(path : string) : list [string];
+		Get(filename : string) : Stream;
+	}
+}

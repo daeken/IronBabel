@@ -1,0 +1,590 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.CPU.PPC;
+using IronBabel.Macros;
+using IronBabel.Macros.PPC;
+using IronBabel.Misc;
+
+namespace IronBabel.CPU.WiiCPU {
+	public class FPReg {
+		mutable mbase : Expr;
+		public mutable _Double : Double;
+		public mutable _PS0 : Single;
+		public mutable _PS1 : Single;
+		mutable CPU : WiiCPU;
+		
+		public this(reg : uint) {
+			mbase = Index(Var("CPU.FPRegs", 0), SNum(reg :> int))
+		}
+		public this(CPU : WiiCPU) {
+			this.CPU = CPU
+		}
+		
+		public PS0 : Expr {
+			get { Member(mbase, Var("_PS0", 0)) }
+		}
+		public PS1 : Expr {
+			get { Member(mbase, Var("_PS1", 0)) }
+		}
+		public Single : Expr {
+			get { Member(mbase, Var("_Single", 0)) }
+		}
+		public SingleRepl : Expr {
+			get { Member(mbase, Var("_SingleRepl", 0)) }
+		}
+		public Double : Expr {
+			get { Member(mbase, Var("_Double", 0)) }
+		}
+		
+		public _Single : Single { 
+			get {
+				if((CPU._HID2 & 0b100U) != 0U)
+					_PS0
+				else
+					_Double :> Single
+			}
+			set {
+				if((CPU._HID2 & 0b100U) != 0U)
+					_PS0 = value
+				else
+					_Double = value :> Double
+			}
+		}
+		
+		public _SingleRepl : Single { 
+			set {
+				if((CPU._HID2 & 0b100U) != 0U) {
+					_PS0 = value;
+					_PS1 = value
+				} else
+					_Double = value :> Double
+			}
+		}
+	}
+	
+	public class WiiCPU : PPC {
+		register HID0  : uint;
+		register HID1  : uint;
+		register HID2  : uint;
+		register HID4  : uint;
+		register GQR0  : uint;
+		register GQR1  : uint;
+		register GQR2  : uint;
+		register GQR3  : uint;
+		register GQR4  : uint;
+		register GQR5  : uint;
+		register GQR6  : uint;
+		register GQR7  : uint;
+		register L2CR  : uint;
+		register MMCR0 : uint;
+		register MMCR1 : uint;
+		register PMC1  : uint;
+		register PMC2  : uint;
+		register PMC3  : uint;
+		register PMC4  : uint;
+		
+		public mutable FPRegs : array [FPReg];
+		public mutable GQR : array [Expr];
+		
+		public this() {
+			base();
+			MMU = BaseMMU(false, 4096);
+			CPUType = "WiiCPU";
+			_ = CompilerParams.ReferencedAssemblies.Add(ObjPath + "IronBabel.CPU.WiiCPU.dll");
+			Using = "IronBabel.CPU.WiiCPU" :: Using;
+			Params = array[this : object, MMU];
+			
+			FPRegs = array(32);
+			for(mutable i : int; i < 32; ++i)
+				FPRegs[i] = FPReg(this);
+			
+			GQR = array [
+				GQR0, GQR1, GQR2, GQR3, 
+				GQR4, GQR5, GQR6, GQR7
+			];
+			
+			XOMasks[4U] = (0x3FFU, false)
+		}
+		
+		protected override SPR(a : uint, b : uint) : Expr {
+			match((b << 5) | a) {
+				| 0x3F0U => HID0
+				| 0x3F1U => HID1
+				| 0x398U => HID2
+				| 0x3F3U => HID4
+				| 0x390U => GQR0
+				| 0x391U => GQR1
+				| 0x392U => GQR2
+				| 0x393U => GQR3
+				| 0x394U => GQR4
+				| 0x395U => GQR5
+				| 0x396U => GQR6
+				| 0x397U => GQR7
+				| 0x3B8U => MMCR0
+				| 0x3BCU => MMCR1
+				| 0x3B9U => PMC1
+				| 0x3BAU => PMC2
+				| 0x3BDU => PMC3
+				| 0x3BEU => PMC4
+				| 0x3F9U => L2CR
+				| _ => base.SPR(a, b)
+			}
+		}
+		
+		protected DWForm(
+			inst : uint,
+			_ : string, _ : string, _ : string, 
+			_ : string, _ : string
+		) : uint * uint * bool * uint * int {
+			(
+				(inst >> 21) & 0x001FU,
+				(inst >> 16) & 0x001FU,
+				((inst >> 15) & 0x0001U) == 1U,
+				(inst >> 11) & 0x0007U,
+				{
+					def simm = inst & 0x07FFU;
+					if(simm & 0x0400U != 0U)
+						(simm :> int) - 0x800
+					else
+						simm :> int
+				}
+			)
+		}
+		// Quantization and dequantization based on gcemu code
+		protected DQFactor : array [Single] = array [
+			1.0f / (1 << 0),
+			1.0f / (1 << 1),
+			1.0f / (1 << 2),
+			1.0f / (1 << 3),
+			1.0f / (1 << 4),
+			1.0f / (1 << 5),
+			1.0f / (1 << 6),
+			1.0f / (1 << 7),
+			1.0f / (1 << 8),
+			1.0f / (1 << 9),
+			1.0f / (1 << 10),
+			1.0f / (1 << 11),
+			1.0f / (1 << 12),
+			1.0f / (1 << 13),
+			1.0f / (1 << 14),
+			1.0f / (1 << 15),
+			1.0f / (1 << 16),
+			1.0f / (1 << 17),
+			1.0f / (1 << 18),
+			1.0f / (1 << 19),
+			1.0f / (1 << 20),
+			1.0f / (1 << 21),
+			1.0f / (1 << 22),
+			1.0f / (1 << 23),
+			1.0f / (1 << 24),
+			1.0f / (1 << 25),
+			1.0f / (1 << 26),
+			1.0f / (1 << 27),
+			1.0f / (1 << 28),
+			1.0f / (1 << 29),
+			1.0f / (1 << 30),
+			1.0f / (1 << 31),
+			
+			0,
+			(1 << 31),
+			(1 << 30),
+			(1 << 29),
+			(1 << 28),
+			(1 << 27),
+			(1 << 26),
+			(1 << 25),
+			(1 << 24),
+			(1 << 23),
+			(1 << 22),
+			(1 << 21),
+			(1 << 20),
+			(1 << 19),
+			(1 << 18),
+			(1 << 17),
+			(1 << 16),
+			(1 << 15),
+			(1 << 14),
+			(1 << 13),
+			(1 << 12),
+			(1 << 11),
+			(1 << 10),
+			(1 << 9),
+			(1 << 8),
+			(1 << 7),
+			(1 << 6),
+			(1 << 5),
+			(1 << 4),
+			(1 << 3),
+			(1 << 2),
+			(1 << 1)
+		];
+		
+		public Dequantize(ea : uint, gqr : uint, off : uint) : Single {
+			def qtype = (gqr & 7U) :> int;
+			def scale = ((gqr >> 25) & 0x1FU) :> int;
+			
+			match(qtype) {
+				| 0 =>
+					MMU.FPMem32[ea + (off << 2), PC]
+				
+				| 4 =>
+					(MMU.Mem8[ea + off, PC] :> Single) * 
+					DQFactor[scale]
+				
+				| 5 =>
+					(MMU.Mem16[ea + (off << 1), PC] :> Single) * 
+					DQFactor[scale]
+				
+				| 6 =>
+					def temp : int = Sign(MMU.Mem8[ea + off, PC] :> uint, 8);
+					(temp :> Single) * 
+					DQFactor[scale]
+				
+				| 7 =>
+					def temp : int = Sign(MMU.Mem16[ea + (off << 2), PC] :> uint, 16);
+					(temp :> Single) * 
+					DQFactor[scale]
+				
+				| qtype =>
+					throw Exception(
+						"Unknown dequantization type {0}" <- qtype
+					)
+			}
+		}
+		
+		protected QFactor : array [Single] = array [
+			(1 <<  0) :> Single,
+			(1 <<  1),
+			(1 <<  2),
+			(1 <<  3),
+			(1 <<  4),
+			(1 <<  5),
+			(1 <<  6),
+			(1 <<  7),
+			(1 <<  8),
+			(1 <<  9),
+		
+			(1 << 10),
+			(1 << 11),
+			(1 << 12),
+			(1 << 13),
+			(1 << 14),
+			(1 << 15),
+			(1 << 16),
+			(1 << 17),
+			(1 << 18),
+			(1 << 19),
+		
+			(1 << 20),
+			(1 << 21),
+			(1 << 22),
+			(1 << 23),
+			(1 << 24),
+			(1 << 25),
+			(1 << 26),
+			(1 << 27),
+			(1 << 28),
+			(1 << 29),
+			(1 << 30),
+			(1 << 31),
+		
+			1.0f / (1L << 32),
+			1.0f / (1 << 31),
+			1.0f / (1 << 30),
+			1.0f / (1 << 29),
+			1.0f / (1 << 28),
+			1.0f / (1 << 27),
+			1.0f / (1 << 26),
+			1.0f / (1 << 25),
+			1.0f / (1 << 24),
+			1.0f / (1 << 23),
+			1.0f / (1 << 22),
+			1.0f / (1 << 21),
+			1.0f / (1 << 20),
+		
+			1.0f / (1 << 19),
+			1.0f / (1 << 18),
+			1.0f / (1 << 17),
+			1.0f / (1 << 16),
+			1.0f / (1 << 15),
+			1.0f / (1 << 14),
+			1.0f / (1 << 13),
+			1.0f / (1 << 12),
+			1.0f / (1 << 11),
+			1.0f / (1 << 10),
+		
+			1.0f / (1 <<  9),
+			1.0f / (1 <<  8),
+			1.0f / (1 <<  7),
+			1.0f / (1 <<  6),
+			1.0f / (1 <<  5),
+			1.0f / (1 <<  4),
+			1.0f / (1 <<  3),
+			1.0f / (1 <<  2),
+			1.0f / (1 <<  1),
+		];
+		
+		public Quantize(ea : uint, fpr : Single, gqr : uint, off : uint) : void {
+			def qtype = (gqr & 7U) :> int;
+			def scale = ((gqr >> 25) & 0x1FU) :> int;
+			
+			match(qtype) {
+				| 0 =>
+					MMU.FPMem32[ea + (off << 2), PC] = fpr
+				
+				| 4 =>
+					def stemp = (fpr * QFactor[scale]) :> int;
+					MMU.Mem8[ea + off, PC] = ({
+						if(stemp > 255) 255
+						else if(stemp < 0) 0
+						else stemp
+					}) :> byte
+				
+				| 5 =>
+					def stemp = (fpr * QFactor[scale]) :> int;
+					MMU.Mem16[ea + off, PC] = ({
+						if(stemp > 65536) 65536
+						else if(stemp < 0) 0
+						else stemp
+					}) :> ushort
+				
+				| 6 =>
+					def stemp = (fpr * QFactor[scale]) :> int;
+					MMU.Mem8[ea + off, PC] = Unsign(
+						{
+							if(stemp > 127) 127
+							else if(stemp < -128) -128
+							else stemp
+						} :> sbyte
+					)
+				
+				| 7 =>
+					def stemp = (fpr * QFactor[scale]) :> int;
+					MMU.Mem16[ea + off, PC] = Unsign(
+						{
+							if(stemp > 32767) 32767
+							else if(stemp < -32768) -32768
+							else stemp
+						} :> short
+					)
+				
+				| qtype =>
+					throw Exception(
+						"Unknown quantization type {0}" <- qtype
+					)
+			}
+		}
+		
+		protected SingleCompare(a : Expr, b : Expr) : Expr {
+			Ternary(
+				Call(Single.IsNaN(a)) ||| Call(Single.IsNaN(b)),
+				Num(0b0001U),
+				Ternary(
+					a < b,
+					Num(0b1000U),
+					Ternary(
+						a > b,
+						Num(0b0100U),
+						Num(0b0010U)
+					)
+				)
+			)
+		}
+		
+		protected DoubleCompare(a : Expr, b : Expr) : Expr {
+			Ternary(
+				Call(Double.IsNaN(a)) ||| Call(Double.IsNaN(b)),
+				Num(0b0001U),
+				Ternary(
+					a < b,
+					Num(0b1000U),
+					Ternary(
+						a > b,
+						Num(0b0100U),
+						Num(0b0010U)
+					)
+				)
+			)
+		}
+		
+		public MakeFPSCR(mutable fm : uint, dval : Double) : uint {
+			mutable fpscr = _FPSCR;
+			def val = BitConverter.ToUInt64(
+				BitConverter.GetBytes(dval),
+				0
+			);
+			
+			for(mutable i : int = 0; i < 8; ++i) {
+				when((fm & 1U) == 1U) {
+					fpscr &= 0xFFFFFFFFU ^ (0xFU << (i << 2));
+					fpscr |= (val & (0xFU << (i << 2))) :> uint
+				}
+				fm >>= 1
+			}
+			
+			fpscr
+		}
+		
+		protected override DefineOpcodes() : void {
+			base.DefineOpcodes();
+			
+			opcode lfs(48, DForm(d : Num, a : Expr, simm : SNum)) {
+				FPReg(d.AsNum()).Single := MemSingle(a + simm)
+			}
+			
+			opcode lfd(50, DForm(s : Num, a : Expr, simm : SNum)) {
+				FPReg(s.AsNum()).Double := MemDouble(a + simm)
+			}
+			
+			opcode stfs(52, DForm(s : Num, a : Expr, simm : SNum)) {
+				MemSingle(a + simm) := FPReg(s.AsNum()).Single
+			}
+			
+			opcode stfd(54, DForm(s : Num, a : Expr, simm : SNum)) {
+				MemDouble(a + simm) := FPReg(s.AsNum()).Double
+			}
+			
+			opcode psq_l(56, DWForm(d, a, w, i, simm)) {
+				def d = FPReg(d);
+				def a = RegOrZero(a);
+				
+				d.PS0 := Call(CPU.Dequantize(a + simm, GQR[i :> int], Num(0U)) : Single);
+				
+				if(w)
+					d.PS1 := Call(CPU.Dequantize(a + simm, GQR[i :> int], Num(1U)) : Single)
+				else
+					d.PS1 := 1.0f
+			}
+			
+			opcode psq_st(60, DWForm(s, a, w, i, simm)) {
+				def s = FPReg(s);
+				def a = RegOrZero(a);
+				
+				Emit(
+					Call(
+						CPU.Quantize(
+							a + simm,
+							s.PS0, 
+							GQR[i :> int], 
+							Num(0U)
+						)
+					)
+				);
+				
+				when(w)
+					Emit(
+						Call(
+							CPU.Quantize(
+								a + simm,
+								s.PS1, 
+								GQR[i :> int],
+								Num(1U)
+							)
+						)
+					)
+			}
+			
+			opcode ps_mr(4, 72, XForm(d, _, b, _)) {
+				def d = FPReg(d);
+				def b = FPReg(b);
+				d.PS0 := b.PS0;
+				d.PS1 := b.PS1
+			}
+			
+			opcode ps_merge01x(4, 560, XForm(d, a, b, _)) {
+				FPReg(d).PS0 := FPReg(a).PS0;
+				FPReg(d).PS1 := FPReg(b).PS1
+			}
+			
+			opcode ps_merge10x(4, 592, XForm(d, a, b, _)) {
+				Var("Single temp", 0) := FPReg(a).PS1;
+				FPReg(d).PS1 := FPReg(b).PS0;
+				FPReg(d).PS0 := Var("temp", 0)
+			}
+			
+			opcode lfsx(31, 535, XForm(d, a, b, _)) {
+				FPReg(d).SingleRepl := MemSingle(RegOrZero(a) + Reg(b))
+			}
+			
+			opcode stfsx(31, 663, XForm(s, a, b, _)) {
+				MemSingle(RegOrZero(a) + Reg(b)) := FPReg(s).Single
+			}
+			
+			opcode fdivs(59, 18, AForm(d, a, b, _, _)) {
+				FPReg(d).Single := FPReg(a).Single / FPReg(b).Single
+			}
+			
+			opcode fsubs(59, 20, AForm(d, a, b, _, _)) {
+				FPReg(d).Single := FPReg(a).Single - FPReg(b).Single
+			}
+			
+			opcode fmuls(59, 25, AForm(d, a, _, c, _)) {
+				FPReg(d).Single := FPReg(a).Single * FPReg(c).Single
+			}
+			
+			opcode frspx(63, 12, XForm(d, _, b, _)) {
+				FPReg(d).Single := FPReg(b).Double :>> Single
+			}
+			
+			opcode fctiwzx(63, 15, XForm(d, _, b, _)) {
+				FPReg(d).Double := Call(
+					Math.Round(
+						FPReg(b).Double,
+						Var("MidpointRounding.ToEven", 0)
+					)
+				)
+			}
+			
+			opcode fdiv(63, 18, AForm(d, a, b, _, _)) {
+				FPReg(d).Double := FPReg(a).Double / FPReg(b).Double
+			}
+			
+			opcode fsub(63, 20, XForm(d, a, b, _)) {
+				FPReg(d).Double := FPReg(a).Double - FPReg(b).Double
+			}
+			
+			opcode fadd(63, 21, XForm(d, a, b, _)) {
+				FPReg(d).Double := FPReg(a).Double + FPReg(b).Double
+			}
+			
+			opcode fmul(63, 25, AForm(d, a, _, c, _)) {
+				FPReg(d).Double := FPReg(a).Double * FPReg(c).Double
+			}
+			
+			opcode fcmpo(63, 32, XForm(d, a, b, _)) {
+				def (a, b) = (FPReg(a).Double, FPReg(b).Double);
+				def c = DoubleCompare(a, b);
+				CR[(d >> 2) :> int] := c;
+				FPSCR := (FPSCR & ~(0xFU << 12)) | (c << 12);
+				
+				FPSCR := Ternary(
+					Call(Double.IsNaN(a)) ||| Call(Double.IsNaN(b)),
+					FPSCR | (1U << 24),
+					FPSCR & ~(1U << 24)
+				)
+			}
+			
+			opcode fneg(63, 40, XForm(d, _, b, _)) {
+				FPReg(d).Double := -FPReg(b).Double
+			}
+			
+			opcode fmr(63, 72, XForm(d, _, b, _)) {
+				FPReg(d).Single := FPReg(b).Single
+			}
+			
+			opcode mtfsfx(63, 711, XForm(d, a, b, _)) {
+				FPSCR := Call(
+					CPU.MakeFPSCR(
+						Num(d | (a >> 1)),
+						FPReg(b).Double
+					) : uint
+				)
+			}
+		}
+	}
+}

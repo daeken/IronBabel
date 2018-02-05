@@ -1,0 +1,64 @@
+using System;
+using System.Text;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel;
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.IA32;
+
+namespace IronBabel.CPU.IA32 {
+	public partial class IA32 : BaseCPU {
+		protected mutable _IDT : uint;
+		public IDT : uint {
+			get { _IDT }
+			set {
+				_IDT = value
+			}
+		}
+		
+		protected InterruptHandlers : Hashtable [byte, IA32 -> void] = Hashtable();
+		
+		public SetInterruptHandler(
+			vec : byte, 
+			handler : IA32 -> void
+		) : void {
+			InterruptHandlers[vec] = handler;
+			MMU.Mem32[_IDT + ((vec :> uint) << 2), PC] = 0U
+		}
+		
+		public HandleInterrupt(vec : uint) : void {
+			if(InterruptHandlers.ContainsKey(vec :> byte))
+				InterruptHandlers[vec :> byte](this)
+			else {
+				def vecbase = _IDT + (vec << 2);
+				if(MMU.Mem32[vecbase, PC] == 0U)
+					throw Exception(
+						"No handler for interrupt {0:X}h" <- vec
+					)
+				else {
+					PC = MMU.Mem16[vecbase, PC];
+					_Cs = MMU.Mem16[vecbase+2, PC]
+				}
+			}
+		}
+		
+		protected DefineInterruptOpcodes() : void {
+			opcode int(0xCD, vec=Ib) {
+				Emit(Call(CPU.HandleInterrupt(vec)))
+			}
+			
+			opcode cli(0xFA) {
+				print "cli not handled"
+			}
+			
+			opcode sti(0xFB) {
+				print "sti not handled"
+			}
+		}
+	}
+}

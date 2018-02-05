@@ -1,0 +1,42 @@
+using System;
+using System.Threading;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.CoreSolo;
+
+namespace IronBabel.Box.Xbox.Kernel {
+	public partial class XboxKrnl {
+		mutable MutexId : uint = 1U;
+		Mutexes : Hashtable [uint, Mutex] = Hashtable();
+		
+		xboxapi(0x115) RtlEnterCriticalSection(
+			_CPU : CoreSolo,
+			CriticalSection : pointer [uint]
+		) : void {
+			def mutex = 
+				lock(Mutexes) {
+					CriticalSection.Index[1U]++;
+					if(CriticalSection.Index[4U] == 0U) { // Init if it's not done
+						def mutex = Mutex();
+						CriticalSection.Index[4U] = MutexId;
+						Mutexes[MutexId] = mutex;
+						MutexId++;
+						mutex
+					} else
+						if(Mutexes.ContainsKey(CriticalSection.Index[4U]))
+							Mutexes[CriticalSection.Index[4U]]
+						else {
+							def mutex = Mutex();
+							Mutexes[CriticalSection.Index[4U]] = mutex;
+							mutex
+						}
+				}
+			_ = mutex.WaitOne();
+			CriticalSection.Index[1U]--
+		}
+	}
+}

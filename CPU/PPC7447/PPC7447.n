@@ -1,0 +1,21 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.CPU.PPC;
+
+namespace IronBabel.CPU.PPC7447 {
+	public class PPC7447 : PPC {
+		public this() {
+			base();
+			MMU = BaseMMU(false, 4096);
+			CPUType = "PPC7447";
+			_ = CompilerParams.ReferencedAssemblies.Add(ObjPath + "IronBabel.CPU.PPC7447.dll");
+			Using = "IronBabel.CPU.PPC7447" :: Using;
+			Params = array[this : object, MMU];
+		}
+	}
+}

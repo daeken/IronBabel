@@ -1,0 +1,70 @@
+using IronBabel.CPU.IA32.Test.Macros;
+
+namespace IronBabel.CPU.IA32.Test {
+	public partial class Arith16 {
+		test add_EbGb() : void {
+			setup {
+				32 = false;
+				al = 1U :> byte;
+				bl = 2U :> byte
+			}
+			code(bits=16) {
+				add[0x00, Eb, Gb](al, bl)
+			}
+			expects al == 3U
+		}
+		test add_EvGv() : void {
+			setup {
+				32 = false;
+				eax = 1U;
+				ebx = 2U
+			}
+			code(bits=16) {
+				add[0x01, Ev, Gv](eax, ebx)
+			}
+			expects eax == 3U
+		}
+		test add_GbEb() : void {
+			setup {
+				32 = false;
+				al = 1U :> byte;
+				bl = 2U :> byte
+			}
+			code(bits=16) {
+				add[0x02, Gb, Eb](al, bl)
+			}
+			expects al == 3U
+		}
+		test add_GvEv() : void {
+			setup {
+				32 = false;
+				eax = 1U;
+				ebx = 2U
+			}
+			code(bits=16) {
+				add[0x03, Gv, Ev](eax, ebx)
+			}
+			expects eax == 3U
+		}
+		test add_AL_Ib() : void {
+			setup {
+				32 = false;
+				al = 1U :> byte
+			}
+			code(bits=16) {
+				add[0x04, Ib](2U)
+			}
+			expects eax == 3U
+		}
+		test add_rAX_Iz() : void {
+			setup {
+				32 = false;
+				eax = 1U
+			}
+			code(bits=16) {
+				add[0x05, Iz](2U)
+			}
+			expects eax == 3U
+		}
+	}
+}

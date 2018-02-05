@@ -1,0 +1,133 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel {
+	public module Misc {
+		public Swap(val : ushort) : ushort {
+			(
+				(val >> 8) | 
+				((val << 8) & (0xFF00U) :> ushort)
+			) :> ushort
+		}
+		
+		public Swap(val : uint) : uint {
+			(
+				(val >> 24) | 
+				((val >> 8)  & 0x0000FF00U) | 
+				((val << 8)  & 0x00FF0000U) | 
+				((val << 24) & 0xFF000000U)
+			)
+		}
+		
+		public Swap(val : ulong) : ulong {
+			(Swap((val >> 32) :> uint) :> ulong) | 
+			((Swap((val & 0xFFFFFFFFUL) :> uint) << 32) :> ulong)
+		}
+		
+		public SignExtend(num : uint, tosize : uint, fromsize : uint) : uint {
+			if(tosize > fromsize) {
+				def num = 
+					unchecked(
+						match(fromsize) {
+							| 8U  => (num :> sbyte) :> int
+							| 16U => (num :> short) :> int
+							| _   => num :> int
+						} :> uint
+					);
+				match(tosize) {
+					| 16U => num & 0xFFFFU
+					| _   => num
+				}
+			} else num
+		}
+		
+		public Sign(num : uint, size : int) : int {
+			match(size) {
+				| 8 =>
+					if(num & 0x80U != 0)
+						(num :> int) - 0x100
+					else
+						num :> int
+				
+				| 16 =>
+					if(num & 0x8000U != 0)
+						(num :> int) - 0x10000
+					else
+						num :> int
+				
+				| 24 =>
+					if(num & 0x800000U != 0)
+						(num :> int) - 0x1000000
+					else
+						num :> int
+				
+				| 32 =>
+					if(num & 0x80000000U != 0)
+						((num :> long) - 0x100000000L) :> int
+					else
+						num :> int
+				| _ => throw Exception("Can't handle signed size {0}" <- size)
+			}
+		}
+		
+		public Unsign(num : sbyte) : byte {
+			if(num == -0x80)
+				0x80U :> byte
+			else if(num < 0)
+				~((-num) :> byte - 1) :> byte
+			else
+				num :> byte
+		}
+		
+		public Unsign(num : short) : ushort {
+			if(num == -0x8000)
+				0x8000U :> ushort
+			else if(num < 0)
+				~((-num) :> ushort - 1) :> ushort
+			else
+				num :> ushort
+		}
+		
+		public Unsign(num : int) : uint {
+			if(num == -0x80000000)
+				0x80000000U
+			else if(num < 0)
+				~((-num) :> uint - 1)
+			else
+				num :> uint
+		}
+		
+		public Unsign(num : long) : ulong {
+			BitConverter.ToUInt64(
+				BitConverter.GetBytes(num),
+				0
+			)
+		}
+		
+		public Resize(value : uint, size : int) : object {
+			match(size) {
+				| 1 => ((value & 0xFFU) :> byte) : object
+				| 2 => ((value & 0xFFFFU) :> ushort) : object
+				| 4 => value : object
+				| 8 => (value :> ulong) : object
+				| _ => null
+			}
+		}
+		
+		public Unsize(value : object, size : int) : uint {
+			match(size) {
+				| 1 => (value :> byte) :> uint
+				| 2 => (value :> ushort) :> uint
+				| 4 => value :> uint
+				| size => throw Exception(
+						"Cannot unsize {0}, {1}" <- (
+							size,
+							value
+						)
+					)
+			}
+		}
+	}
+}

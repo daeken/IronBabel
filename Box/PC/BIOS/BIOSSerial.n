@@ -1,0 +1,26 @@
+using System;
+using System.IO;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.IA32;
+using IronBabel.Device.Drive;
+
+namespace IronBabel.Box.PC {
+	public partial class BIOS {
+		SerialService(_ : IA32) : void {
+			match(CPU._Ah) {
+				| 0x00 =>
+					CPU._Ah = 0b10000000 :> byte
+				
+				| vec =>
+					throw Exception(
+						"Unknown serial service vector {0:X}h" <- vec
+					)
+			}
+		}
+	}
+}

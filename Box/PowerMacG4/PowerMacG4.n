@@ -1,0 +1,43 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Box;
+using IronBabel.CPU.PPC7447;
+using IronBabel.Device.Drive.ImageDrive;
+using IronBabel.Filesystem.PartitionMap.APM;
+using IronBabel.Idb.Run;
+
+namespace IronBabel.Box.PowerMacG4 {
+	public class PowerMacG4 : IBox {
+		mutable CPU : PPC7447 = PPC7447();
+		public Running : bool { get { CPU.Running } }
+		
+		public static Main(args : array [string]) : void { Run(PowerMacG4, args) }
+		
+		public this(args : array [string]) {
+			def drive = ImageDrive(args[0]);
+			def partmap = APM(drive);
+			def _part = partmap.GetPartition(
+				match(partmap.PartsByType["Apple_HFS"]) {
+					| [] => throw Exception("No HFS partition")
+					| head :: _ => head
+				}
+			);
+		}
+		
+		public Start() : void {
+			CPU.Running = true;
+			//when(CPU.Execute())
+			//	Start()
+		}
+		
+		public Shutdown() : void {
+			CPU.Shutdown()
+		}
+		
+		public UpdateDisplay() : void {
+		}
+	}
+}

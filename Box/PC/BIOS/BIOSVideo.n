@@ -1,0 +1,45 @@
+using System;
+using System.Text;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU.IA32;
+
+namespace IronBabel.Box.PC {
+	public partial class BIOS {
+		protected mutable CursorX = 0U;
+		protected mutable CursorY = 0U;
+		
+		VideoService(_ : IA32) : void {
+			match(CPU._Ah) {
+				| 0x0E =>
+					if(CPU._Al :> char == '\n') // Handle newline
+						NewLine()
+					else if(CPU._Al :> char == '\r') // Ignore carriage return
+						()
+					else {
+						CPU.MMU.Mem8[0xB8000U + (CursorY * 160) + (CursorX << 1), CPU.PC]
+							= CPU._Al;
+						++CursorX;
+						when(CursorX == 80)
+							NewLine()
+					}
+				
+				| vec =>
+					throw Exception(
+						"Unknown video service vector {0:X}h" <- vec
+					)
+			}
+		}
+		
+		protected NewLine() : void {
+			CursorX = 0;
+			++CursorY;
+			
+			when(CursorY == 24)
+				for(mutable off = 0U; off < 80U * 23U * 2U; ++off)
+					CPU.MMU.Mem8[0xB8000U + off, CPU.PC] = CPU.MMU.Mem8[0xB8000U + 160U + off, CPU.PC]
+		}
+	}
+}

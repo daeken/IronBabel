@@ -1,0 +1,65 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.CPU {
+	public class pointer [T] {
+		public Addr : uint;
+		public Value : T {
+			get { Getter(Addr) }
+			set { Setter(Addr, value) }
+		}
+		
+		public Off [off : uint] : T {
+			get { Getter(Addr + off) }
+			set { Setter(Addr + off, value) }
+		}
+		
+		public Index [ind : uint] : T {
+			get { Getter(Addr + ind * Size) }
+			set { Setter(Addr + ind * Size, value) }
+		}
+		
+		Size : uint;
+		Getter : uint -> T;
+		Setter : uint * T -> void;
+		
+		IsType(A : Type, B : Type) : bool {
+			A.Equals(B) || A.IsSubclassOf(B)
+		}
+		
+		public this(MMU : BaseMMU, addr : uint) {
+			Addr = addr;
+			(Size, Getter, Setter) = 
+				if(IsType(typeof(T), typeof(byte)))
+					(
+						1U,
+						fun(addr : uint) { MMU.Mem8[addr, 0U] :> T }, 
+						fun(addr : uint, value : T) { MMU.Mem8[addr, 0U] = value :> byte }
+					)
+				else if(IsType(typeof(T), typeof(ushort)))
+					(
+						2U,
+						fun(addr : uint) { MMU.Mem16[addr, 0U] :> T }, 
+						fun(addr : uint, value : T) { MMU.Mem16[addr, 0U] = value :> ushort }
+					)
+				else if(IsType(typeof(T), typeof(uint)))
+					(
+						4U,
+						fun(addr : uint) { MMU.Mem32[addr, 0U] :> T }, 
+						fun(addr : uint, value : T) { MMU.Mem32[addr, 0U] = value :> uint }
+					)
+				else if(IsType(typeof(T), typeof(ulong)))
+					(
+						8U,
+						fun(addr : uint) { MMU.Mem64[addr, 0U] :> T }, 
+						fun(addr : uint, value : T) { MMU.Mem64[addr, 0U] = value :> ulong }
+					)
+				else
+					throw Exception(
+						"Unsupported pointer type {0}" <- typeof(T)
+					)
+		}
+	}
+}

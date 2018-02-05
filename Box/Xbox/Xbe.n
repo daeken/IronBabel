@@ -1,0 +1,146 @@
+using System;
+using System.IO;
+
+using Nextem;
+using Nextem.Conversion;
+using Nextem.String;
+using Nextem.Struct;
+
+namespace IronBabel.Box.Xbox {
+	[Binary]
+	public struct XbeHeader {
+		Magic : uint;
+		[ArraySize(256)]
+		Signature : array [byte];
+		BaseAddr : uint;
+		SizeofHeaders : uint;
+		SizeofImage : uint;
+		SizeofImageHeader : uint;
+		Timestamp : uint;
+		CertAddr : uint;
+		Sections : int;
+		SectionHeadersAddr : uint;
+		InitFlags : uint;
+		Entrypoint : uint;
+		TlsAddr : uint;
+		PeStackCommit : uint;
+		PeHeapReserve : uint;
+		PeHeapCommit : uint;
+		PeBaseAddr : uint;
+		PeSizeofImage : uint;
+		PeChecksum : uint;
+		PeTimestamp : uint;
+		DebugPathnameAddr : uint;
+		DebugFilenameAddr : uint;
+		DebugUniFilenameAddr : uint;
+		KernelThunkAddr : uint;
+		NonKernelImportAddr : uint;
+		LibraryVersionsAddr : uint;
+		KernelLibraryVersionAddr : uint;
+		XApiLibraryVersionAddr : uint;
+		LogoBitmapAddr : uint;
+		LogoBitmapSize : uint
+	}
+	
+	[Binary]
+	public struct XbeCertificate {
+		Size : uint;
+		Timestamp : uint;
+		TitleId : uint;
+		[ArraySize(40)]
+		TitleName : array [char];
+		[ArraySize(16)]
+		AltTitleIds : array [uint];
+		AllowedMedia : uint;
+		GameRegion : uint;
+		DiskNumber : uint;
+		Version_ : uint;
+		[ArraySize(16)]
+		LanKey : array [byte];
+		[ArraySize(16)]
+		SigKey : array [byte];
+		[ArraySize(256)]
+		TitleAltSigKey : array [byte]
+	}
+	
+	[Binary]
+	public struct XbeSectionHeader {
+		Flags : uint;
+		VirtualAddr : uint;
+		VirtualSize : uint;
+		PhysicalAddr : uint;
+		PhysicalSize : uint;
+		NameAddr : uint;
+		RefCount : uint;
+		HeadSharedRefCountAddr : uint;
+		TailSharedRefCountAddr : uint;
+		[ArraySize(20)]
+		Digest : array [byte]
+	}
+	
+	[Binary]
+	public struct XbeTls {
+		DataStartAddr : uint;
+		DataEndAddr : uint;
+		IndexAddr : uint;
+		CallbackAddr : uint;
+		ZeroFillSize : uint;
+		Characteristics : uint
+	}
+	
+	[Binary]
+	public struct XbeLibraryVersion {
+		[ArraySize(8)]
+		Name : array [byte];
+		Major : ushort;
+		Minor : ushort;
+		Build : ushort;
+		Flags : ushort;
+	}
+	
+	public class Xbe {
+		public TitleName : string;
+		public XdkVersion : int;
+		public BaseAddr : uint;
+		public HeaderSize : uint;
+		public Entrypoint : uint;
+		public KernelThunkAddr : uint;
+		public Sections : array [XbeSectionHeader];
+		public Tls : XbeTls;
+		
+		public this(fn : string) {
+			def fp = File.OpenRead(fn);
+			
+			def header = XbeHeader(fp);
+			
+			HeaderSize = header.SizeofHeaders;
+			BaseAddr = header.BaseAddr;
+			
+			fp.Position = (header.CertAddr - BaseAddr) :> long;
+			def cert = XbeCertificate(fp);
+			def namelen = match(Array.IndexOf(cert.TitleName, '\0')) { | -1 => cert.TitleName.Length | x => x }
+			TitleName = String(cert.TitleName, 0, namelen);
+			
+			fp.Position = (header.SectionHeadersAddr - BaseAddr) :> long;
+			Sections = array(header.Sections);
+			for(mutable i = 0; i < header.Sections; ++i)
+				Sections[i] = XbeSectionHeader(fp);
+			
+			fp.Position = (header.TlsAddr - BaseAddr) :> long;
+			Tls = XbeTls(fp);
+			
+			def debugAddr = header.KernelThunkAddr ^ 0xEFB1F152U;
+			def retailAddr = header.KernelThunkAddr ^ 0x5B6D40B6U;
+			(KernelThunkAddr, Entrypoint) = 
+				if(
+					debugAddr >= BaseAddr && 
+					debugAddr < BaseAddr + header.SizeofImage
+				) (debugAddr, header.Entrypoint ^ 0x94859D4BU)
+				else (retailAddr, header.Entrypoint ^ 0xA8FC57ABU);
+			
+			fp.Position = (header.KernelLibraryVersionAddr - BaseAddr) :> long;
+			def version = XbeLibraryVersion(fp);
+			XdkVersion = version.Build :> int
+		}
+	}
+}

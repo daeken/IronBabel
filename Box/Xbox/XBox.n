@@ -1,0 +1,120 @@
+using System;
+using System.IO;
+
+using Nextem;
+using Nextem.Conversion;
+using Nextem.String;
+
+using IronBabel.Box;
+using IronBabel.CPU;
+using IronBabel.CPU.CoreSolo;
+using IronBabel.Idb.Run;
+
+using IronBabel.Box.Xbox.Kernel;
+
+namespace IronBabel.Box.Xbox {
+	public partial class Xbox : IBox {
+		protected CPU : CoreSolo = CoreSolo();
+		protected Kernel : XboxKrnl;
+		public CurXbe : Xbe;
+		public Running : bool { get { CPU.Running } }
+		
+		public static Main(args : array [string]) : void { Run(Xbox, args) }
+		
+		public this(args : array [string]) {
+			BaseMMU.CPU = CPU : BaseCPU;
+			def physMem = array.[byte](64 * 1024 * 1024); // 64MB
+			CPU.MMU.AddPhysicalMapping(
+				Mapping.Physical(
+					0x00000000U,
+					(physMem.Length : int) :> uint,
+					physMem,
+					0
+				)
+			);
+			
+			Kernel = XboxKrnl(this);
+			
+			def fn = args[0];
+			def xbe = Xbe(fn);
+			CurXbe = xbe;
+			print "Loading '{0}' (XDK {1})" <- (xbe.TitleName, xbe.XdkVersion);
+			
+			def fp = File.OpenRead(fn);
+			_ = fp.Read(physMem, 0, xbe.HeaderSize :> int);
+			CPU.MMU.AddPages(xbe.BaseAddr, 0U, xbe.HeaderSize, PageFlags.All);
+			
+			mutable top = xbe.HeaderSize;
+			foreach(section in xbe.Sections) {
+				print "Loading segment {0} to {1:X8} ({2:X8})" <- (
+					CPU.MMU.GetString(section.NameAddr, 0U), 
+					section.VirtualAddr,
+					section.VirtualAddr - xbe.BaseAddr
+				);
+				fp.Position = section.PhysicalAddr :> long;
+				_ = fp.Read(physMem, (section.VirtualAddr - xbe.BaseAddr) :> int, section.PhysicalSize :> int);
+				top = section.VirtualAddr + section.VirtualSize
+			}
+			
+			CPU.MMU.AddPages(xbe.BaseAddr, 0U, top - xbe.BaseAddr, PageFlags.All);
+			top += 0x1000U - (top & 0xFFFU);
+			Kernel.Reserved = (xbe.BaseAddr, 0U, top - xbe.BaseAddr);
+			def sp = Kernel.Allocate(CPU, 1024U * 1024U) + 1024U * 1024U - 4U;
+			CPU.MMU.Mem32[sp, 0U] = 0x80000FFFU; // This just lets us die at the end of start
+			
+			CPU.MMU.AddPhysicalMapping(
+				Mapping.HWReg(
+					0x80000000U,
+					0x1000U,
+					KernelHandler,
+					null
+				)
+			);
+			
+			CPU.MMU.AddPages(0x80000000U, 0x80000000U, 0x1000U, PageFlags.Read | PageFlags.Execute);
+			
+			CPU._32 = true;
+			
+			unless(xbe.Tls.CallbackAddr == 0U) {
+				CPU.PC = xbe.Tls.CallbackAddr;
+				CPU._Esp = sp;
+				Start()
+			}
+			
+			CPU.PC = xbe.Entrypoint;
+			CPU._Esp = sp;
+			
+			Kernel.SetupFS(CPU);
+		}
+		
+		KernelHandler(CPU : BaseCPU, addr : uint, _size : int, _PC : uint) : object {
+			def CPU = CPU :> CoreSolo;
+			def ord = (addr & ~0x80000000U) :> int;
+			
+			print "spdfoj";
+			if(ord == 0xFFF) // start routine finished
+				CPU.Shutdown()
+			else if(Kernel.APIs.ContainsKey(ord)) {
+				Kernel.APIs[ord](CPU); 
+				CPU.MMU.LeaveLock(0, null);
+			} else {
+				print "Unknown kernel API {0:X}" <- ord;
+				CPU.Shutdown()
+			}
+			
+			throw RestartRecompilation()
+		}
+		
+		public Start() : void {
+			CPU.Running = true;
+			when(CPU.Execute())
+				Start()
+		}
+		
+		public Shutdown() : void {
+			CPU.Shutdown()
+		}
+		
+		public UpdateDisplay() : void {}
+	}
+}

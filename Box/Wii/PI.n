@@ -1,0 +1,45 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.Device;
+using IronBabel.Misc;
+
+namespace IronBabel.Box.Wii {
+	public class PI {
+		protected Box : Wii;
+		
+		public this(Box : Wii) {
+			this.Box = Box;
+			Box.AddHWReg(0x0C003000U, 0x0100U, GetPI, SetPI);
+		}
+		
+		public mutable IntCause : uint = 0U;
+		public mutable IntMask : uint = 0U;
+		
+		GetPI(_CPU : BaseCPU, addr : uint, size : int, PC : uint) : object {
+			print "PI get {0:X} from {1:X}" <- (addr, PC);
+			
+			Resize(
+				match(addr) {
+					| 0x0C003000U => IntCause
+					| 0x0C003004U => IntMask
+					| _ => 0U
+				},
+				size
+			)
+		}
+		SetPI(_CPU : BaseCPU, addr : uint, value : object, size : int, PC : uint) : void {
+			def value = Unsize(value, size);
+			print "PI set {0:X} to {1:X} from {2:X}" <- (addr, value, PC);
+			
+			match(addr) {
+				| 0x0C003004U =>
+					IntMask = value
+				| _ => ()
+			}
+		}
+	}
+}

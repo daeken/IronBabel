@@ -1,0 +1,75 @@
+using System;
+using System.Drawing;
+using System.Threading;
+using SdlDotNet.Core;
+using SdlDotNet.Graphics;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Box;
+
+namespace IronBabel.Frontend.SDL {
+	public class SDL {
+		protected mutable Screen : Surface;
+		protected Box : IBox;
+		protected mutable VGAFont : SdlDotNet.Graphics.Font;
+		protected Glyphs : array [Surface] = array(256);
+		public BufferChars : array [byte] = array(80 * 25);
+		public _BufferColor : array [byte] = array(80 * 25);
+		
+		public this(Box : IBox) {
+			this.Box = Box;
+			Thread(ThreadStart(Start)).Start()
+		}
+		
+		Start() : void {
+			Screen = Video.SetVideoMode(720, 400);
+			Video.WindowCaption = "IronBabel VGA Display";
+			
+			VGAFont = Font(@"C:\windows\fonts\lucon.ttf", 12);
+			
+			for(mutable i = 0; i < 256; ++i)
+				Glyphs[i] = VGAFont.Render(
+					string(
+						i :> char,
+						1
+					),
+					Color.White
+				);
+			
+			Events.Quit += EventHandler(
+				fun(_ : object, _ : QuitEventArgs) {
+					Box.Shutdown();
+					Events.QuitApplication()
+				}
+			);
+			
+			Events.Fps = 30;
+			Events.Tick += EventHandler(
+				fun(_ : object, _ : TickEventArgs) {
+					Box.UpdateDisplay();
+					_ = Screen.Fill(Color.Black);
+					mutable off = 0;
+					for(mutable y = 0; y < 25; ++y) {
+						for(mutable x = 0; x < 80; ++x) {
+							def glyph = Glyphs[BufferChars[off] :> int];
+							unless(glyph == null || BufferChars[off] == 0)
+								_ = Screen.Blit(
+									glyph,
+									Point(
+										x * 9,
+										y * 16
+									)
+								);
+							off++
+						}
+					}
+					_ = Screen.Update()
+				}
+			);
+			
+			Events.Run()
+		}
+	}
+}

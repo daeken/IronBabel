@@ -1,0 +1,80 @@
+using System;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.Macros.PPC {
+	macro opcode(opcd, body)
+	syntax("opcode", opcd, Optional(body)) {
+		def ParseDec(dec) {
+			| <[ $form(.. $args) ]> =>
+				def inst = Macros.UseSiteSymbol("inst");
+				mutable vars = [];
+				mutable types = [];
+				foreach(arg in args) {
+					| <[ _ ]> =>
+						vars = <[ _ ]> :: vars;
+						types = <[ "" ]> :: types
+					
+					| <[ $(name : dyn) ]> with atype = null
+					| <[ $(name : dyn) : $atype ]> =>
+						vars = <[ $(Macros.UseSiteSymbol(name) : name) ]> :: vars;
+						def atype = {
+							if(atype == null)
+								<[ "" ]>
+							else
+								<[ $(atype.ToString() : string) ]>
+						};
+						types = atype :: types
+					| expr => throw Exception(
+							"Unknown arg expr {0}" <- expr
+						)
+				}
+				types = <[ $(inst : name) ]> :: types.Reverse();
+				<[ def (.. $(vars.Reverse())) = $form(.. $types) ]>
+			| _ => <[ () ]>
+		}
+		
+		match(opcd) {
+			| <[ $mnem($opcd, $dec) ]> with xo = null
+			| <[ $mnem($opcd, $xo, $dec) ]> =>
+				def varname = Macros.UseSiteSymbol("inst");
+				def (form, opcd) = {
+					if(xo == null)
+						(<[ Opcode ]>, <[ $opcd :> uint ]>)
+					else
+						(<[ XOpcode ]>, <[ ($opcd :> uint, $xo :> uint) ]>)
+				};
+				def dec = match(dec) {
+					| <[ stub ]> =>
+						<[
+							print "{0} not handled {1:X}" <- (
+								$(mnem.ToString() : string),
+								$(varname : name)
+							)
+						]>
+					| _ => ParseDec(dec)
+				}
+				def body = {
+					if(body == null)
+						<[ () ]>
+					else
+						body
+				}
+				<[
+					$form(
+						$opcd,
+						$(mnem.ToString() : string),
+						fun($(varname : name) : uint) : void {
+							$dec;
+							$body
+						}
+					);
+				]>
+			| _ =>
+				throw Exception("Uhh, {0} {1}" <- (opcd, body))
+		}
+	}
+}

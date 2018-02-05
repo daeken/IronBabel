@@ -1,0 +1,24 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Device.Drive;
+
+namespace IronBabel.Filesystem.PartitionMap {
+	public interface IPartitionMap {
+		Count : int {
+			get;
+		}
+		GetPartition(num : int) : Partition;
+	}
+	
+	[Record]
+	public class Partition {
+		Drive : IDrive;
+		Name : string;
+		Start : int;
+		Size : int;
+		Filesystem : IFilesystem;
+	}
+}

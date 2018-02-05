@@ -1,0 +1,324 @@
+using System;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.CPU.IA32.Test.Macros {
+	[Nemerle.MacroUsage(
+		Nemerle.MacroPhase.BeforeInheritance, 
+		Nemerle.MacroTargets.Method
+	)]
+	macro Test(t : TypeBuilder, m : ParsedMethod)
+	syntax("test") {
+		t.GetModifiers().AddCustomAttribute(<[ NUnit.Framework.TestFixture() ]>);
+		m.AddCustomAttribute(<[ NUnit.Framework.Test() ]>);
+		m.Attributes |= NemerleAttributes.Public;
+		
+		match(m.Body) {
+			| <[ { .. $seq } ]> =>
+				m.Body = <[
+					def $("CPU" : dyn) = IronBabel.CPU.IA32.IA32();
+					$("CPU" : dyn).MMU = IronBabel.CPU.BaseMMU(true, 4096);
+					$("CPU" : dyn).Params = array [$("CPU" : dyn) : object, $("CPU" : dyn).MMU];
+					{ .. $seq }
+				]>
+			| _ => throw Exception(
+					"Test body isn't a sequence"
+				)
+		}
+	}
+	
+	macro Setup(setup)
+	syntax("setup", setup) {
+		def Build(seq, accum=[]) {
+			match(seq) {
+				| [] => accum.Reverse()
+				| head :: tail =>
+					def (name, val) = 
+						match(head) {
+							| <[ $name = $val ]> =>
+								def name = name.ToString();
+								def name = "_" + char.ToUpper(name[0]).ToString() + name.Slice(1);
+								(<[ $("CPU" : dyn).$(name : dyn) ]>, val)
+							| _ => throw Exception(
+									"Unknown setup line"
+								)
+						}
+					Build(tail, <[ $name = $val ]> :: accum)
+			}
+		}
+		
+		def seq = 
+			match(setup) {
+				| <[ { .. $seq } ]> => seq
+				| expr => [expr]
+			}
+		<[ { .. $(Build(seq)) } ]>
+	}
+	
+	macro Code(args, code)
+	syntax("code", args, code) {
+		mutable bits = 16;
+		mutable codebase = 0U;
+		mutable PC : uint;
+		
+		def argseq = 
+			match(args) {
+				| <[ ( .. $seq ) ]> => seq
+				| expr => [expr]
+			}
+		
+		foreach(arg in argseq)
+			match(arg) {
+				| <[ bits = $(val : int) ]> =>
+					bits = val
+				| <[ codebase = $(val : uint) ]> =>
+					codebase = val
+				| <[ $name=$_ ]> => throw Exception(
+						"Unknown code argument {0}" <- name
+					)
+				| _ => throw Exception(
+						"Invalid code argument format"
+					)
+			}
+		PC = codebase;
+		
+		def OpSize(size) {
+			| 'b' => 1
+			| 'v' | 'z' => if(bits == 16) 2 else 4
+			| 'w' => 2
+			| 'd' => 4
+			| 'q' => 8
+			| _ => 0
+		}
+		
+		def AsString(expr) {
+			expr.ToString()
+		}
+		def AsUInt(expr : PExpr) {
+			| <[ $(val : uint) ]> => val
+			| _ => 0U
+		}
+		
+		def Assemble(opcd : uint, form, operands) : array [byte] {
+			mutable len = 1;
+			mutable modrm = false;
+			
+			foreach(oper in form) {
+				def oper = oper.ToString();
+				when(oper.Length == 2) {
+					def form = oper[0];
+					def size = oper[1];
+					
+					unless(char.ToLower(size) == size)
+						break;
+					
+					def size = OpSize(size);
+					
+					match(form) {
+						| 'G' | 'E' => modrm = true
+						| 'I' => len += size
+						| form => throw Exception(
+								"Unknown form {0}" <- form
+							)
+					}
+				}
+			}
+			
+			when(modrm) ++len;
+			
+			def code = array(len);
+			len = if(modrm) 2 else 1;
+			code[0] = opcd :> byte;
+			
+			mutable mod = 0;
+			mutable reg = 0;
+			mutable rm  = 0;
+			
+			def SubAssemble(form, operands) {
+				def MakeReg(reg) {
+					| "al" | "ax" | "eax" => 0b000
+					| "cl" | "cx" | "ecx" => 0b001
+					| "dl" | "dx" | "edx" => 0b010
+					| "bl" | "bx" | "ebx" => 0b011
+					| "ah" | "sp" | "esp" => 0b100
+					| "ch" | "bp" | "ebp" => 0b101
+					| "dh" | "si" | "esi" => 0b110
+					| "bh" | "di" | "edi" => 0b111
+					| _ => 0
+				}
+				
+				def MakeModRM(_size, oper) {
+					match(oper) {
+						| "al" | "ax" | "eax" => (0b11, 0b000)
+						| "cl" | "cx" | "ecx" => (0b11, 0b001)
+						| "dl" | "dx" | "edx" => (0b11, 0b010)
+						| "bl" | "bx" | "ebx" => (0b11, 0b011)
+						| "ah" | "sp" | "esp" => (0b11, 0b100)
+						| "ch" | "bp" | "ebp" => (0b11, 0b101)
+						| "dh" | "si" | "esi" => (0b11, 0b110)
+						| "bh" | "di" | "edi" => (0b11, 0b111)
+						| _ => (0, 0)
+					}
+				}
+				
+				match(form, operands) {
+					| ([], []) => ()
+					| (form :: ftail, oper :: otail) =>
+						def form = form.ToString();
+						def oper = oper;
+						
+						when(form.Length == 2) {
+							def size = OpSize(form[1]);
+							def form = form[0];
+							
+							match(form) {
+								| 'G' => reg = MakeReg(AsString(oper))
+								| 'E' => (mod, rm) = MakeModRM(size, AsString(oper))
+								| 'I' =>
+									def oper = AsUInt(oper);
+									match(size) {
+										| 1 =>
+											code[len] = oper :> byte
+										| 2 =>
+											code[len] = (oper & 0xFF) :> byte;
+											code[len+1] = (oper >> 8) :> byte
+										| 4 | _ =>
+											code[len] = (oper & 0xFF) :> byte;
+											code[len+1] = ((oper >> 8) & 0xFF) :> byte;
+											code[len+2] = ((oper >> 16) & 0xFF) :> byte;
+											code[len+3] = ((oper >> 24) & 0xFF) :> byte
+									}
+									len += size
+								| _ => ()
+							}
+						}
+						
+						SubAssemble(ftail, otail)
+					| _ => ()
+				}
+			}
+			
+			SubAssemble(form, operands);
+			
+			when(modrm)
+				code[1] = ((mod << 6) | (reg << 3) | rm) :> byte;
+			
+			code
+		}
+		
+		def Build(seq, accum=[]) {
+			match(seq) {
+				| [] =>
+					def end = array(if(bits == 32) 5 else 3);
+					end[0] = 0xE9 :> byte;
+					(end :: accum).Reverse()
+				| head :: tail =>
+					def accum = 
+						match(head : PExpr) {
+							| <[ $_ [ .. $form ] ( .. $args ) ]> =>
+								def code = 
+									Assemble(
+										match(form.Head) {
+											| <[ $(opcd : int) ]> => opcd :> uint
+											| <[ $(opcd : uint) ]> => opcd
+											| _ => 0U
+										}, 
+										form.Tail, 
+										args
+									);
+								PC += code.Length :> uint;
+								code :: accum
+							| _ => throw Exception(
+									"Invalid instruction format"
+								)
+						}
+					Build(tail, accum)
+			}
+		}
+		
+		def codeseq = 
+			match(code) {
+				| <[ { .. $seq } ]> => seq
+				| expr => [expr]
+			}
+		
+		def insts = Build(codeseq);
+		
+		def Combine(insts, mutable accum=[]) {
+			match(insts) {
+				| [] => accum.Reverse()
+				| head :: tail =>
+					foreach(c in head)
+						accum ::= <[ $(c : byte) ]>;
+					
+					Combine(tail, accum)
+			}
+		}
+		
+		def code = Combine(insts);
+		
+		<[
+			$("CPU" : dyn).PC = $(codebase : uint);
+			def physMem = array.[byte](1024*1024);
+			$("CPU" : dyn).MMU.AddPhysicalMapping(
+				IronBabel.CPU.Mapping.Physical(
+					$(codebase : uint),
+					1024U*1024U,
+					physMem,
+					0
+				)
+			);
+			$("CPU" : dyn).MMU.AddPages(
+				$(codebase : uint),
+				$(codebase : uint),
+				1024U*1024U,
+				PageFlags.All
+			);
+			Array.Copy(
+				array [ .. $code ],
+				0,
+				physMem,
+				0,
+				$(code.Length : int)
+			);
+			
+			while($("CPU" : dyn).PC < $(PC : uint))
+				_ = $("CPU" : dyn).Execute()
+		]>
+	}
+	
+	macro Expects(expects)
+	syntax("expects", expects) {
+		def Build(seq, accum=[]) {
+			match(seq) {
+				| [] => accum.Reverse()
+				| head :: tail =>
+					def assertion = 
+						match(head) {
+							| <[ $reg == $val ]> with isTrue=true
+							| <[ $reg != $val ]> with isTrue=false =>
+								def reg = reg.ToString();
+								def reg = "_" + char.ToUpper(reg[0]).ToString() + reg.Slice(1);
+								def reg = <[ $("CPU" : dyn).$(reg : dyn) ]>;
+								if(isTrue) <[ NUnit.Framework.Assert.AreEqual($val, $reg) ]>
+								else <[ NUnit.Framework.Assert.AreNotEqual($val, $reg) ]>
+							| _ => throw Exception(
+									"Invalid expects line"
+								)
+						}
+					Build(tail, assertion :: accum)
+			}
+		}
+		
+		def seq = 
+			match(expects) {
+				| <[ { .. $seq } ]> => seq
+				| expr => [expr]
+			}
+		<[ { .. $(Build(seq)) } ]>
+	}
+}

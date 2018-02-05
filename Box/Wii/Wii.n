@@ -1,0 +1,264 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Box;
+using IronBabel.CPU;
+using IronBabel.CPU.WiiCPU;
+using IronBabel.Idb.Run;
+using IronBabel.Misc;
+
+namespace IronBabel.Box.Wii {
+	public class Wii : IBox {
+		mutable State : int;
+		public mutable DVD : WiiDVD;
+		public mutable CPU : WiiCPU;
+		public mutable DSPI : DSPI;
+		public mutable IOS  : IOS;
+		public mutable PI   : PI;
+		public Running : bool { get { CPU.Running } }
+		
+		public static Main(args : array [string]) : void { Run(Wii, _.CPU, args) }
+		
+		public this(args : array [string]) {
+			CPU = WiiCPU();
+			//CPU.SetupCache("cache.bin");
+			CPU._R1 = 0x817FF000U;
+			CPU._R3 = 0xDEAD8000U;
+			CPU._R4 = 0xDEAD8004U;
+			CPU._R5 = 0xDEAD8008U;
+			CPU._LR = 0xDEAD0000U;
+			CPU._MSR = 0x0E0D0000U;
+			
+			State = 0;
+			
+			DVD = WiiDVD(args[0], 1);
+			
+			def mem1Bytes = array.[byte](24 * 1024 * 1024); // 24MB
+			def mem2Bytes = array.[byte](64 * 1024 * 1024); // 64MB
+			def dead8Bytes = array.[byte](0x8000);
+			
+			AddHWReg(0x0C002000U, 0x0100U, GetVI, SetVI);
+			AddHWReg(0x0C004000U, 0x0080U, GetMI, SetMI);
+			AddHWReg(0x0D006000U, 0x1000U, GetDI, SetDI);
+			AddHWReg(0x0D800000U, 0x1000U, GetUnk, SetUnk);
+			AddHWReg(0xDEAD0000U, 0x8000U, GetDEAD, SetDEAD, false);
+			
+			DSPI = IronBabel.Box.Wii.DSPI(this);
+			IOS = IronBabel.Box.Wii.IOS(this);
+			PI = IronBabel.Box.Wii.PI(this);
+			
+			def AddPhysical(addr, buffer, multi : bool = true) {
+				AddMapping(
+					Mapping.Physical(
+						addr,
+						(buffer.Length : int) :> uint,
+						buffer,
+						0
+					),
+					addr,
+					(buffer.Length : int) :> uint,
+					multi
+				)
+			}
+			AddPhysical(0x00000000U, mem1Bytes);
+			AddPhysical(0x10000000U, mem2Bytes);
+			AddPhysical(0xDEAD8000U, dead8Bytes, false);
+			
+			ReadDVD(0x0000U, 0x20U, 0x80000000U);
+			ReadDVD(0x2450U, 0x08U, 0xDEAD8000U);
+			ReadDVD(
+				0x2460U, 
+				CPU.MMU.GetUInt32(0xDEAD8004U, 0U), 
+				0x81200000U
+			);
+			
+			CPU.PC = CPU.MMU.GetUInt32(0xDEAD8000U, 0U);
+			
+			def values = [
+				(0x8000002CU, 0x00000023U), // Production board model
+				(0x800000F8U, 0x0E7BE2C0U), // Bus speed
+				(0x800000FCU, 0x2B73A840U), // CPU speed
+				(0x80003130U, 0x933E0000U), // IOS heap low
+				(0x80003134U, 0x93400000U), // IOS heap high
+				(0x80003140U, 0x00090204U), // IOS version high
+				(0x80003144U, 0x00062507U), // IOS version low
+				(0x8000315EU, 0x01070000U), // Unknown version
+				
+				(0x80003118U, 0x00000000U), // Unknown
+				(0x8000311CU, 0x00000000U), // Unknown
+				(0x80003120U, 0x00000000U), // Unknown
+				(0x80003124U, 0x00000000U), // Unknown
+				(0x80003128U, 0x00000000U), // Unknown
+			];
+			foreach((addr, val) in values)
+				CPU.MMU.SetUInt32(addr, val, 0U);
+			
+			CPU.MMU.SetUInt32(0x80000028U, (mem1Bytes.Length : int) :> uint, 0U);
+			CPU.MMU.SetUInt32(0x800030F0U, (mem1Bytes.Length : int) :> uint, 0U);
+		}
+		
+		public Start() : void {
+			CPU.Running = true;
+			when(CPU.Execute())
+				Start()
+		}
+		
+		public Shutdown() : void {
+			CPU.Shutdown()
+		}
+		
+		public UpdateDisplay() : void {
+		}
+		
+		public AddMapping(
+			mapping : Mapping, addr : uint, 
+			size : uint, multi : bool
+		) : void {
+			CPU.MMU.AddPhysicalMapping(mapping);
+			CPU.MMU.AddPages(
+				addr,
+				addr,
+				size,
+				PageFlags.All
+			);
+			when(multi) {
+				CPU.MMU.AddPages(
+					addr+0x80000000U,
+					addr,
+					size,
+					PageFlags.All
+				);
+				CPU.MMU.AddPages(
+					addr+0xC0000000U,
+					addr,
+					size,
+					PageFlags.All
+				)
+			}
+		}
+		
+		public AddHWReg(
+			addr : uint, size : uint, 
+			getter : BaseCPU * uint * int * uint -> object, 
+			setter : BaseCPU * uint * object * int * uint -> void, 
+			multi : bool = true
+		) : void {
+			AddMapping(
+				Mapping.HWReg(
+					addr,
+					size,
+					getter,
+					setter
+				),
+				addr,
+				size,
+				multi
+			)
+		}
+		
+		ReadDVD(pos : uint, size : uint, addr : uint) : void {
+			print "Reading 0x{0:X} bytes from DVD(0x{1:X}) to {2:X}" <- (
+				size,
+				pos,
+				addr
+			);
+			def buf = array(size :> int);
+			DVD.Read(pos, size, buf, 0U);
+			CPU.MMU.SetPhysBytes(addr, buf, 0U)
+		}
+		
+		GetDEAD(_CPU : BaseCPU, addr : uint, _ : int, PC : uint) : object {
+			match(addr) {
+				| 0xDEAD0000U =>
+					match(State) {
+						| 0 =>
+							CPU._R3 = 0xDEAD0004U
+						
+						| 1 =>
+							CPU._R3 = 0xDEAD800CU;
+							CPU._R4 = 0xDEAD8010U;
+							CPU._R5 = 0xDEAD8014U;
+						
+						| 2 =>
+							if(CPU._R3 != 0) {
+								def memdest = CPU.MMU.GetUInt32(0xDEAD800CU, PC);
+								def size = CPU.MMU.GetUInt32(0xDEAD8010U, PC);
+								def pos = CPU.MMU.GetUInt32(0xDEAD8014U, PC) << 2;
+								
+								ReadDVD(pos, size, memdest);
+								
+								CPU._R3 = 0xDEAD800CU;
+								CPU._R4 = 0xDEAD8010U;
+								CPU._R5 = 0xDEAD8014U;
+								
+								CPU.MMU.SetUInt32(0xDEAD800CU, 0U, PC);
+								CPU.MMU.SetUInt32(0xDEAD8010U, 0U, PC);
+								CPU.MMU.SetUInt32(0xDEAD8014U, 0U, PC);
+								
+								State--
+							} else
+								print "Moving to Closing"
+						
+						| 3 =>
+							print "Entering game code at {0:X}" <- CPU._R3;
+							CPU.PC = CPU._R3
+						
+						| _ => ()
+					}
+					
+					unless(State == 3)
+						CPU.PC = CPU.MMU.GetUInt32(0xDEAD8000U + ((State :> uint) << 2), 0xDEAD0000U);
+					
+					State++
+				
+				| 0xDEAD0004U =>
+					CPU.PC = CPU._LR;
+					print "OSReport: {0}" <- CPU.MMU.GetString(CPU._R3, PC)
+				
+				| _ => ()
+			}
+			
+			throw RestartRecompilation()
+		}
+		SetDEAD(_CPU : BaseCPU, _addr : uint, _value : object, _size : int, _PC : uint) : void {
+		}
+		
+		// Disc Interface
+		GetDI(_CPU : BaseCPU, addr : uint, size : int, PC : uint) : object {
+			print "DI get {0:X} from {1:X}" <- (addr, PC);
+			Resize(0U, size)
+		}
+		SetDI(_CPU : BaseCPU, addr : uint, value : object, _size : int, PC : uint) : void {
+			print "DI set {0:X} to {1:X} from {2:X}" <- (addr, value, PC)
+		}
+		
+		// Memory Interface
+		GetMI(_CPU : BaseCPU, addr : uint, size : int, PC : uint) : object {
+			print "MI get {0:X} from {1:X}" <- (addr, PC);
+			Resize(0U, size)
+		}
+		SetMI(_CPU : BaseCPU, addr : uint, value : object, _size : int, PC : uint) : void {
+			print "MI set {0:X} to {1:X} from {2:X}" <- (addr, value, PC)
+		}
+		
+		// Video Interface
+		GetVI(_CPU : BaseCPU, addr : uint, size : int, PC : uint) : object {
+			print "VI get {0:X} from {1:X}" <- (addr, PC);
+			Resize(0U, size)
+		}
+		SetVI(_CPU : BaseCPU, addr : uint, value : object, _size : int, PC : uint) : void {
+			print "VI set {0:X} to {1:X} from {2:X}" <- (addr, value, PC)
+		}
+		
+		// Unknown -- this is at 0D800000.  Starlet?
+		GetUnk(_CPU : BaseCPU, addr : uint, size : int, PC : uint) : object {
+			print "Unknown get {0:X} from {1:X}" <- (addr, PC);
+			Resize(0U, size)
+		}
+		SetUnk(_CPU : BaseCPU, addr : uint, value : object, _size : int, PC : uint) : void {
+			print "Unknown set {0:X} to {1:X} from {2:X}" <- (addr, value, PC)
+		}
+	}
+}

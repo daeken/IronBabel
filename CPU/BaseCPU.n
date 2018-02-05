@@ -1,0 +1,489 @@
+using System;
+using System.CodeDom.Compiler;
+using System.IO;
+using System.Reflection;
+using System.Threading;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+
+namespace IronBabel.CPU {
+	public class BusError : Exception {
+		public Addr : uint;
+		public PC : uint;
+		
+		public this(Addr : uint, PC : uint) {
+			base(
+				"Bus error @ {0:X} accessing {1:X}" <- (
+					PC,
+					Addr
+				)
+			);
+			this.Addr = Addr;
+			this.PC = PC;
+		}
+	}
+	
+	public class RecompilationError : Exception {
+		public this(error : string) {
+			base(error)
+		}
+	}
+	
+	public class RestartRecompilation : Exception {}
+	public class Interrupt : Exception {}
+	
+	public abstract class BaseCPU {
+		public mutable PC : uint;
+		public mutable MMU : BaseMMU;
+		public ObjPath : string;
+		protected mutable IOPorts : Hashtable [uint, (uint -> uint) * (uint * uint -> void)] = Hashtable();
+		protected mutable CompilerParams : CompilerParameters = CompilerParameters();
+		protected mutable Provider : CodeDomProvider = CodeDomProvider.CreateProvider("CSharp");
+		public mutable MethodCache : Hashtable [uint, bool * uint * uint * MethodInfo * Expr] = Hashtable();
+		protected mutable CPUType : string;
+		public mutable Params : array [object];
+		protected mutable End : bool;
+		protected mutable Using : list [string];
+		protected mutable Instructions : list [Expr];
+		protected mutable CacheFile : Stream;
+		public mutable Running : bool = true;
+		protected mutable Verbose : bool = false;
+		protected mutable TempVars : Hashtable [string * string, int] = null;
+		protected mutable TempVarNums : Hashtable [string, int];
+		public mutable Breakpoints : Hashtable [uint, bool] = Hashtable();
+		public mutable ContinueAddr : uint = 0U;
+		
+		public mutable RecordAll : bool = false;
+		
+		public virtual CachePC : uint {
+			get { PC }
+		}
+		
+		public this() {
+			ObjPath = 
+				if(File.Exists("IronBabel.CPU.dll"))
+					"";
+				else
+					"Obj/";
+			CompilerParams.CompilerOptions = "/optimize+";
+			CompilerParams.GenerateExecutable = false;
+			CompilerParams.GenerateInMemory = true;
+			CompilerParams.IncludeDebugInformation = false;
+			_ = CompilerParams.ReferencedAssemblies.Add(ObjPath + "IronBabel.Misc.dll");
+			_ = CompilerParams.ReferencedAssemblies.Add(ObjPath + "IronBabel.CPU.dll");
+			
+			CPUType = "BaseCPU";
+			Using = ["System", "IronBabel", "IronBabel.CPU"];
+		}
+		
+		public Shutdown() : void {
+			Running = false
+		}
+		
+		public CacheFlush() : void {
+			mutable keys = [];
+			foreach(key in MethodCache.Keys)
+				keys ::= key;
+			
+			foreach(key in keys) {
+				def (_, crc, size, method, expr) = MethodCache[key];
+				MethodCache[key] = (false, crc, size, method, expr)
+			}
+		}
+		
+		protected virtual CopyFrom(cpu : BaseCPU) : BaseCPU {
+			MMU = cpu.MMU;
+			IOPorts = cpu.IOPorts;
+			CompilerParams = cpu.CompilerParams;
+			Provider = cpu.Provider;
+			Breakpoints = cpu.Breakpoints;
+			this
+		}
+		
+		public virtual Clone() : BaseCPU {
+			throw Exception("Clone must be overridden")
+		}
+		
+		public CreateThread(func : BaseCPU -> void) : Thread {
+			Thread(
+				ParameterizedThreadStart(
+					fun(cpu : object) : void {
+						func(cpu :> BaseCPU)
+					}
+				)
+			)
+		}
+		
+		protected Temp(ttype : string, name : string = "temp") : Expr {
+			def size =
+				match(ttype) {
+					| "byte" => 8
+					| "ushort" | "short" => 16
+					| "uint" | "int" | "float" => 32
+					| "ulong" | "long" | "double" => 64
+					| _ => 0
+				}
+			if(
+				TempVars.ContainsKey((name, ttype))
+			)
+				Var(
+					"{0}{1}" <- (
+						name,
+						TempVars[(name, ttype)]
+					), 
+					size
+				)
+			else {
+				def useName =
+					if(TempVarNums.ContainsKey(name)) {
+						TempVars[(name, ttype)] = TempVarNums[name] + 1;
+						TempVarNums[name] = TempVars[(name, ttype)];
+						"{0}{1}" <- (
+							name,
+							TempVarNums[name]
+						)
+					} else {
+						TempVars[(name, ttype)] = 0;
+						TempVarNums[name] = 0;
+						name + "0"
+					}
+				
+				Var(
+					"{0} {1}" <- (
+						ttype,
+						useName
+					),
+					size
+				)
+			}
+		}
+		
+		protected AddCacheEntry(start : uint, tup : bool * uint * uint * MethodInfo * Expr) : MethodInfo {
+			MethodCache[start] = tup;
+			
+			unless(CacheFile == null) {
+				def (_, crc, size, _, expr) = tup;
+				CacheFile.Write(
+					BitConverter.GetBytes(start),
+					0,
+					4
+				);
+				CacheFile.Write(
+					BitConverter.GetBytes(crc),
+					0,
+					4
+				);
+				CacheFile.Write(
+					BitConverter.GetBytes(size),
+					0,
+					4
+				);
+				expr.ToBinary(CacheFile);
+				CacheFile.Flush()
+			}
+			
+			tup[3]
+		}
+		
+		public SetupCache(file : string) : void {
+			def CullRepeats(blocks, accum=[], addrs=[]) {
+				match(blocks) {
+					| [] => accum
+					| head :: tail when !addrs.Contains(head[0]) =>
+						CullRepeats(tail, head :: accum, head[0] :: addrs)
+					| _ :: tail =>
+						CullRepeats(tail, accum, addrs)
+				}
+			}
+			
+			mutable fp : Stream = null;
+			def temp = array(12);
+			mutable blocks = [];
+			try {
+				fp = File.OpenRead(file);
+				while(fp.Read(temp, 0, 12) == 12) {
+					def start = BitConverter.ToUInt32(temp, 0);
+					def crc = BitConverter.ToUInt32(temp, 4);
+					def size = BitConverter.ToUInt32(temp, 8);
+					def expr = Expr.FromBinary(fp);
+					blocks ::= (start, crc, size, expr)
+				}
+			} catch {
+				| _ is FileNotFoundException => ()
+			}
+			
+			unless(fp == null)
+				fp.Close();
+			
+			CacheFile = File.OpenWrite(file);
+			
+			blocks = CullRepeats(blocks);
+			def decompblocks = $[ (start, expr) | (start, _, _, expr) in blocks ];
+			
+			when(blocks.Length != 0) {
+				def method = Compile(Decompile(decompblocks));
+				foreach((start, crc, size, expr) in blocks)
+					_ = AddCacheEntry(start, (false, crc, size, method, expr))
+			}
+		}
+		
+		protected ValidateCache(key : uint) : bool {
+			def (valid, crc, size, method, expr) = MethodCache[key];
+			def valid = 
+				if(valid) true
+				else if(crc == MMU.Crc32(key, size)) {
+					MethodCache[key] = (true, crc, size, method, expr);
+					true
+				}
+				else false;
+			
+			if(valid) {
+				foreach(pair in Breakpoints)
+					when(pair.Value && ContinueAddr != pair.Key && pair.Key >= key && pair.Key <= key+size) {
+						return false
+					}
+				true
+			} else false
+		}
+		
+		public Execute() : bool {
+			mutable restart = false;
+			if(Running) {
+				try {
+					def method =
+						lock(MethodCache) {
+							if(MethodCache.ContainsKey(CachePC) && ValidateCache(CachePC))
+								MethodCache[CachePC][3]
+							else {
+								def start = CachePC;
+								def (method, expr) = Recompile(CachePC);
+								
+								if(!Running && Breakpoints.ContainsKey(CachePC) && Breakpoints[CachePC])
+									method
+								else {
+									def size = CachePC - start;
+									def tup = (true, MMU.Crc32(start, size), size, method, expr);
+									AddCacheEntry(start, tup)
+								}
+							}
+						}
+					try {
+						when(Running)
+							_ = method.Invoke(null, Params)
+					} catch {
+						| e is TargetInvocationException =>
+							unless(HandleException(e.InnerException))
+								throw
+					}
+				} catch {
+					| _ is RestartRecompilation =>
+						restart = true
+					| _ is Exception =>
+						throw
+				}
+				
+				if(restart)
+					Execute()
+				else
+					Running
+			} else
+				false
+		}
+		
+		protected Branch(next : uint) : void {
+			Branch(Num(next))
+		}
+		protected Branch(next : Expr) : void {
+			Var("CPU.PC", 32) := next;
+			End = true
+		}
+		
+		protected Eval(func : void -> void) : Expr {
+			def tempInstructions = Instructions;
+			Instructions = [];
+			func();
+			def expr = Block(Instructions);
+			Instructions = tempInstructions;
+			expr
+		}
+		
+		public DebugBP() : bool {
+			Debug();
+			true
+		}
+		
+		public Debug() : void {
+			Emit(Call(CPU.Debug(PC)))
+		}
+		
+		public virtual Debug(_PC : uint) : void {
+		}
+		
+		public Recompile(start : uint) : MethodInfo * Expr {
+			print "Recompiling {0,8:X} ({1:X})" <- (PC, CachePC);
+			
+			TempVars = Hashtable();
+			TempVarNums = Hashtable();
+			Instructions = [];
+			End = false;
+			
+			while(!End)
+				if(ContinueAddr != CachePC && Breakpoints.ContainsKey(CachePC) && Breakpoints[CachePC]) {
+					Branch(PC);
+					Running = false;
+					End = true
+				} else
+					Translate();
+			ContinueAddr = 0U;
+			
+			def expr = Expr.Block(Instructions);
+			
+			(
+				Compile(Decompile([(start, expr)])),
+				expr
+			)
+		}
+		
+		protected abstract Translate() : void;
+		
+		public Emit(expr : Expr) : void {
+			Instructions = expr :: Instructions
+		}
+		
+		protected Decompile(blocks : list [uint * Expr]) : string {
+			def FormatUsing(Using, accum) {
+				match(Using) {
+					| [] => accum
+					| head :: tail =>
+						FormatUsing(
+							tail,
+							"using {0};\n{1}" <- (
+								head,
+								accum
+							)
+						)
+				}
+			}
+			
+			def FormatBlocks(blocks, accum) {
+				match(blocks) {
+					| [] => accum
+					| (start, expr) :: tail =>
+						FormatBlocks(
+							tail,
+							@"				case 0x{0:X}U: unchecked {{
+{1}					break;
+				}};
+{2}" <- (
+								start,
+								expr.ToString(6),
+								accum
+							)
+						)
+				}
+			}
+			
+			if(blocks.Length == 1)
+				@"{0}
+namespace IronBabel.Decompiled {{
+	public class Decompiled {{
+		public static void Block({1} CPU, BaseMMU MMU) {{
+			{3}
+			unchecked {{
+{2}			}};
+		}}
+	}}
+}}
+" <- (
+					FormatUsing(Using, ""),
+					CPUType,
+					blocks.Head[1].ToString(4), 
+					if(RecordAll)
+						"System.Console.WriteLine(\"Running {0:X8}\");" <- blocks.Head[0]
+					else
+						""
+				)
+			else
+				@"{0}
+namespace IronBabel.Decompiled {{
+	public class Decompiled {{
+		public static void Block({1} CPU, BaseMMU MMU) {{
+			bool handled = true;
+			while(handled) {{
+				switch(CPU.PC) {{
+{2}					default:
+						handled = false;
+						break;
+				}}
+			}}
+		}}
+	}}
+}}
+" <- (
+					FormatUsing(Using, ""),
+					CPUType,
+					FormatBlocks(blocks, "")
+				)
+		}
+		
+		public Compile(code : string) : MethodInfo {
+			def cr = 
+				lock(Provider) {
+					Provider.CompileAssemblyFromSource(CompilerParams, code)
+				}
+			when(Verbose)
+				print code;
+			
+			when(cr.Errors.Count > 0) {
+				unless(Verbose) // Don't want to print the code twice
+					print code;
+				
+				foreach(err in cr.Errors)
+					print err;
+				throw RecompilationError("Compilation failed")
+			}
+			
+			def dtype = cr.CompiledAssembly.GetType("IronBabel.Decompiled.Decompiled");
+			dtype.GetMethod("Block")
+		}
+		
+		public virtual TranslateAddress(addr : Expr) : Expr {
+			addr
+		}
+		
+		public HandleException(e : Exception) : bool {
+			| _ is Interrupt => true
+			| _ => false
+		}
+		
+		public AddPort(
+			port : uint, 
+			_get : uint -> uint,
+			_set : uint * uint -> void
+		) : void {
+			IOPorts[port] = (_get, _set)
+		}
+		
+		public ReadPort(port : uint, size : uint) : uint {
+			if(IOPorts.ContainsKey(port) && IOPorts[port][0] != null)
+				IOPorts[port][0](size)
+			else {
+				print "No getter for port {0:X}h" <- port;
+				0U
+			}
+		}
+		
+		public WritePort(port : uint, value : uint, size : uint) : void {
+			if(IOPorts.ContainsKey(port) && IOPorts[port][1] != null)
+				IOPorts[port][1](value, size)
+			else
+				print "No setter for port {0:X}h (0x{0:X})" <- (port, value)
+		}
+	}
+}

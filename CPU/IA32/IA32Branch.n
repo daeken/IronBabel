@@ -1,0 +1,318 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel;
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.IA32;
+
+namespace IronBabel.CPU.IA32 {
+	public partial class IA32 : BaseCPU {
+		protected CondBranch(cond : Expr, target : uint) : void {
+			Emit(
+				If(
+					cond,
+					Eval(
+						quoteblock {
+							Branch(target)
+						}
+					),
+					Eval(
+						quoteblock {
+							Branch(PC)
+						}
+					)
+				)
+			)
+		}
+		
+		protected DefineBranchOpcodes() : void {
+			opcode jo(0x70, target=Jb) {
+				CondBranch(
+					(EFlags & OF) != 0U,
+					target
+				)
+			}
+			
+			opcode jb(0x72, target=Jb) {
+				CondBranch(
+					(EFlags & CF) != 0U,
+					target
+				)
+			}
+			
+			opcode jnb(0x73, target=Jb) {
+				CondBranch(
+					(EFlags & CF) == 0U,
+					target
+				)
+			}
+			
+			opcode jz(0x74, target=Jb) {
+				CondBranch(
+					(EFlags & ZF) != 0U,
+					target
+				)
+			}
+			
+			opcode jnz(0x75, target=Jb) {
+				CondBranch(
+					(EFlags & ZF) == 0U,
+					target
+				)
+			}
+			
+			opcode jbe(0x76, target=Jb) {
+				CondBranch(
+					(
+						((EFlags & CF) != 0U) |||
+						((EFlags & ZF) != 0U)
+					),
+					target
+				)
+			}
+			
+			opcode jnbe(0x77, target=Jb) {
+				CondBranch(
+					(
+						((EFlags & CF) == 0U) &&&
+						((EFlags & ZF) == 0U)
+					),
+					target
+				)
+			}
+			
+			opcode js(0x78, target=Jb) {
+				CondBranch(
+					(EFlags & SF) != 0U,
+					target
+				)
+			}
+			
+			opcode jl(0x7C, target=Jb) {
+				CondBranch(
+					(EFlags & SF) != 0U,
+					target
+				)
+			}
+			
+			opcode jnl(0x7D, target=Jb) {
+				CondBranch(
+					(EFlags & SF) == 0U,
+					target
+				)
+			}
+			
+			opcode call(0x9A, target=Iz, segment=Iz) {
+				if(_32)
+					Push(Num(PC), 32);
+				else {
+					Push(Cs);
+					Push(Num(PC), 16);
+				}
+				
+				Emit(Call(CPU.CacheFlush()));
+				Cs := segment;
+				Branch(target)
+			}
+			
+			opcode ret(0xC2, pop=Iw) {
+				if(_32) {
+					Pop(Temp("uint"));
+					Branch(Temp("uint"))
+				} else {
+					Pop(Temp("ushort"));
+					Branch(Temp("ushort"))
+				}
+				VSp := VSp + pop
+			}
+			
+			opcode ret(0xC3) {
+				if(_32) {
+					Pop(Temp("uint"));
+					Branch(Temp("uint"))
+				} else {
+					Pop(Temp("ushort"));
+					Branch(Temp("ushort"))
+				}
+			}
+			
+			opcode retfar(0xCB) {
+				if(_32) {
+					Pop(Temp("uint"));
+					Branch(Temp("uint"))
+				} else {
+					Emit(Call(CPU.CacheFlush()));
+					Pop(Temp("ushort"));
+					Pop(Cs);
+					Branch(Temp("ushort"))
+				}
+			}
+			
+			opcode loop(0xE2, target=Jb) {
+				VCx := VCx - 1;
+				CondBranch(
+					VCx > 0,
+					target
+				)
+			}
+			
+			opcode jcxz(0xE3, target=Jb) {
+				CondBranch(
+				 	VCx == 0U,
+					target
+				)
+			}
+			
+			opcode call(0xE8, target=Jz) {
+				if(_32)
+					Push(Num(PC), 32);
+				else
+					Push(Num(PC), 16);
+				
+				Branch(target)
+			}
+			
+			opcode jmp(0xE9, target=Jz) {
+				Branch(target)
+			}
+			
+			opcode jmp(0xEA, target=Iz, segment=Iz) {
+				Emit(Call(CPU.CacheFlush()));
+				Cs := segment;
+				Branch(target)
+			}
+			
+			opcode jmp(0xEB, target=Jb) {
+				Branch(target)
+			}
+			
+			opcode jo(0x0F80, target=Jz) {
+				CondBranch(
+					(EFlags & OF) != 0U,
+					target
+				)
+			}
+			
+			opcode jno(0x0F81, target=Jz) {
+				CondBranch(
+					(EFlags & OF) == 0U,
+					target
+				)
+			}
+			
+			opcode jb(0x0F82, target=Jz) {
+				CondBranch(
+					(EFlags & CF) != 0U,
+					target
+				)
+			}
+			
+			opcode jnb(0x0F83, target=Jz) {
+				CondBranch(
+					(EFlags & CF) == 0U,
+					target
+				)
+			}
+			
+			opcode jz(0x0F84, target=Jz) {
+				CondBranch(
+					(EFlags & ZF) != 0U,
+					target
+				)
+			}
+			
+			opcode jnz(0x0F85, target=Jz) {
+				CondBranch(
+					(EFlags & ZF) == 0U,
+					target
+				)
+			}
+			
+			opcode jbe(0x0F86, target=Jz) {
+				CondBranch(
+					(
+						((EFlags & CF) != 0U) |||
+						((EFlags & ZF) != 0U)
+					),
+					target
+				)
+			}
+			
+			opcode jnbe(0x0F87, target=Jz) {
+				CondBranch(
+					(
+						((EFlags & CF) == 0U) &&&
+						((EFlags & ZF) == 0U)
+					),
+					target
+				)
+			}
+			
+			opcode js(0x0F88, target=Jz) {
+				CondBranch(
+					(EFlags & SF) != 0U,
+					target
+				)
+			}
+			
+			opcode jns(0x0F89, target=Jz) {
+				CondBranch(
+					(EFlags & SF) == 0U,
+					target
+				)
+			}
+			
+			opcode jp(0x0F8A, target=Jz) {
+				CondBranch(
+					(EFlags & PF) != 0U,
+					target
+				)
+			}
+			
+			opcode jnp(0x0F8B, target=Jz) {
+				CondBranch(
+					(EFlags & PF) == 0U,
+					target
+				)
+			}
+			
+			opcode jl(0x0F8C, target=Jz) {
+				CondBranch(
+					(EFlags & SF) != 0U,
+					target
+				)
+			}
+			
+			opcode jnl(0x0F8D, target=Jz) {
+				CondBranch(
+					(EFlags & SF) == 0U,
+					target
+				)
+			}
+			
+			opcode jle(0x0F8E, target=Jz) {
+				CondBranch(
+					(
+						((EFlags & ZF) != 0U) |||
+						((EFlags & SF) != (EFlags & OF))
+					),
+					target
+				)
+			}
+			
+			opcode jnle(0x0F8F, target=Jz) {
+				CondBranch(
+					(
+						((EFlags & ZF) == 0U) &&&
+						((EFlags & SF) == (EFlags & OF))
+					),
+					target
+				)
+			}
+		}
+	}
+}

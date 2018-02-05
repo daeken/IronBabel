@@ -1,0 +1,322 @@
+using System;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.PPC;
+using IronBabel.Misc;
+
+namespace IronBabel.CPU.PPC {
+	public partial class PPC : BaseCPU {
+		public CountLeadingZeros(mutable val : uint) : uint {
+			mutable count = 0U;
+			
+			while(val != 0 && (val & 0x80000000U) == 0U) {
+				count++;
+				val = unchecked(val << 1);
+			}
+			count
+		}
+		
+		protected static RotL32(left : Expr, right : uint) : Expr {
+			unchecked ((left << right) | (left >> (32U - right)))
+		}
+		protected static RotL32(left : Expr, right : Expr) : Expr {
+			(left << right) | (left >> 32U - right)
+		}
+		protected static RotR32(left : Expr, right : Expr) : Expr {
+			(left >> right) | (left << (32U - right))
+		}
+		
+		protected static Mask32(x : int, mutable y : int) : uint {
+			mutable mask = 0xFFFFFFFFU;
+			unchecked {
+				if(x > y) {
+					mask >>= x;
+					mask |= 0xFFFFFFFFU << (31 - y)
+				} else {
+					mask <<= x;
+					mask >>= x;
+					y = 31 - y;
+					mask >>= y;
+					mask <<= y
+				}
+			}
+			mask
+		}
+		
+		protected static SO : uint = 1U << 31;
+		protected static OV : uint = 1U << 30;
+		protected static CA : uint = 1U << 29;
+		
+		public Add(left : uint, right : uint) : uint {
+			try {
+				def temp = checked(left + right);
+				_XER &= ~CA;
+				temp
+			} catch {
+				| _ is OverflowException =>
+					_XER |= CA;
+					unchecked(left + right)
+			}
+		}
+		
+		public Add(left : int, right : int) : int {
+			try {
+				def temp = checked(left + right);
+				_XER &= ~CA;
+				temp
+			} catch {
+				| _ is OverflowException =>
+					_XER |= CA;
+					unchecked(left + right)
+			}
+		}
+		
+		public Sub(left : int, right : int) : int {
+			try {
+				def temp = checked(left - right);
+				_XER &= ~CA;
+				temp
+			} catch {
+				| _ is OverflowException =>
+					_XER |= CA;
+					unchecked(left - right)
+			}
+		}
+		
+		public MulLow(left : int, right : int) : uint {
+			def prod = Unsign((left :> long) * (right :> long));
+			(prod & 0xFFFFFFFFUL) :> uint
+		}
+		
+		public MulHigh(left : uint, right : uint) : uint {
+			def prod = (left :> ulong) * (right :> ulong);
+			(prod >> 32) :> uint
+		}
+		
+		protected DefineArithOpcodes() : void {
+			opcode mulli(7, DForm(d, a, simm : SNum)) {
+				d := Call(CPU.MulLow(Signed(a), Signed(simm)) : uint)
+			}
+			
+			opcode subfic(8, DForm(d, a, simm : SNum)) {
+				d := Signed(simm) ^- Signed(a)
+			}
+			
+			opcode addic(12, DForm(d, a, simm : SNum)) {
+				d := a + simm
+			}
+			
+			opcode addcr(13, DForm(d, a, simm : SNum)) {
+				d := a + simm;
+				Record(d)
+			}
+			
+			opcode addi(14, DForm(d, a : Expr, simm : SNum)) {
+				d := a + simm
+			}
+			
+			opcode addis(15, DForm(d, a : Expr, simm : SNum)) {
+				d := a + (simm << 16)
+			}
+			
+			opcode rlwimix(20, MForm(s, a, sh, mb, me, rc)) {
+				def mask = Mask32(mb :> int, me :> int);
+				a := (RotL32(s, sh) & mask) | (a & ~mask);
+				Record(rc, a)
+			}
+			
+			opcode rlwinmx(21, MForm(s, a, sh, mb, me, rc)) {
+				a := RotL32(s, sh) & Mask32(mb :> int, me :> int);
+				Record(rc, a)
+			}
+			
+			opcode ori(24, DForm(s, a, uimm)) {
+				a := s | uimm
+			}
+			
+			opcode oris(25, DForm(d, a, uimm)) {
+				d := a | (uimm << 16)
+			}
+			
+			opcode xoris(27, DForm(d, a, uimm)) {
+				d := a ^ (uimm << 16)
+			}
+			
+			opcode addir(28, DForm(s, a, uimm)) {
+				a := s & uimm;
+				Record(a)
+			}
+			
+			opcode crxor(19, 193, XForm(d, a, b, _)) {
+				def (dl, dh) = ((d & 3U) :> int, (d >> 2) :> int);
+				def a = (CR[(a >> 2) :> int] >> (a & 3)) & 1U;
+				def b = (CR[(b >> 2) :> int] >> (b & 3)) & 1U;
+				def mask = (0xFU ^ (1U << dl)) & 0xFU;
+				def bit = (a ^ b) & 0xFU;
+				CR[dh] := (CR[dh] & mask) | (bit << dl)
+			}
+			
+			opcode subfcx(31, 8, XForm(d, a, b, rc)) {
+				Reg(d) := Signed(Reg(b)) ^- Signed(Reg(a));
+				Record(rc, d)
+			}
+			
+			opcode addcx(31, 10, XForm(d, a, b, rc)) {
+				Reg(d) := Reg(a) ^+ Reg(b);
+				Record(rc, d)
+			}
+			
+			opcode mulhwux(31, 11, XForm(d, a, b, rc)) {
+				Reg(d) := Call(CPU.MulHigh(Reg(a), Reg(b)));
+				Record(rc, d)
+			}
+			
+			opcode slwx(31, 24, XForm(s, a, b, rc)) {
+				def (s, a, b) = (Reg(s), Reg(a), Reg(b));
+				
+				def mask = 0xFFFFFFFFU << Ternary(
+					(b & 0x20U) == 0x20U,
+					b & 0x1FU,
+					Num(0U)
+				);
+				a := RotL32(s, b & 0x1FU) & mask;
+				Record(rc, a)
+			}
+			
+			opcode cntlzwx(31, 26, XForm(s, a, _, rc)) {
+				Reg(a) := Call(CPU.CountLeadingZeros(Reg(s)) : uint);
+				Record(rc, a)
+			}
+			
+			opcode andx(31, 28, XForm(s, a, b, rc)) {
+				Reg(a) := Reg(s) & Reg(b);
+				Record(rc, a)
+			}
+			
+			opcode subf(31, 40, XForm(d, a, b, _)) {
+				Reg(d) := Reg(b) - Reg(a)
+			}
+			
+			opcode andc(31, 60, XForm(s, a, b, rc)) {
+				Reg(a) := Reg(s) & ~Reg(b);
+				Record(rc, a)
+			}
+			
+			opcode negx(31, 104, XForm(d, a, _, rc)) {
+				Reg(d) := ~Reg(a) + 1;
+				Record(rc, d)
+			}
+			
+			opcode norx(31, 124, XForm(s, a, b, rc)) {
+				Reg(a) := ~(Reg(s) | Reg(b));
+				Record(rc, a)
+			}
+			
+			opcode subfex(31, 136, XForm(d, a, b, rc)) {
+				Reg(d) := Signed(~Reg(a)) ^+ Signed(Reg(b)) ^+ Signed((XER >> 29) & 1U);
+				Record(rc, d)
+			}
+			
+			opcode addex(31, 138, XForm(d, a, b, rc)) {
+				Reg(d) := Signed(~Reg(a)) ^+ Signed(Reg(b)) ^+ Signed((XER >> 29) & 1U);
+				Record(rc, d)
+			}
+			
+			opcode addzex(31, 202, XForm(d, a, _, rc)) {
+				Reg(d) := Reg(a) + ((XER >> 29) & 1U);
+				Record(rc, d)
+			}
+			
+			opcode mullwx(31, 235, XForm(d, a, b, rc)) {
+				Reg(d) := Call(CPU.MulLow(Signed(Reg(a)), Signed(Reg(b))) : uint);
+				Record(rc, d)
+			}
+			
+			opcode add(31, 266, XForm(d, a, b, rc)) {
+				Reg(d) := Signed(Reg(a)) + Signed(Reg(b));
+				Record(rc, a)
+			}
+			
+			opcode xorx(31, 316, XForm(s, a, b, rc)) {
+				Reg(a) := Reg(s) ^ Reg(b);
+				Record(rc, a)
+			}
+			
+			opcode orcx(31, 412, XForm(s, a, b, rc)) {
+				Reg(a) := Reg(s) | ~(Reg(b));
+				Record(rc, a)
+			}
+			
+			opcode orx(31, 444, XForm(s, a, b, rc)) {
+				Reg(a) := Reg(s) | Reg(b);
+				Record(rc, a)
+			}
+			
+			opcode divwux(31, 459, XForm(d, a, b, rc)) {
+				Reg(d) := Reg(a) / Reg(b);
+				Record(rc, d)
+			}
+			
+			opcode srwx(31, 536, XForm(s, a, b, rc)) {
+				def (s, a, b) = (Reg(s), Reg(a), Reg(b));
+				
+				def mask = 0xFFFFFFFFU >> Ternary(
+					(b & 0x20U) == 0x20U,
+					b & 0x1FU,
+					Num(0U)
+				);
+				a := RotR32(s, b & 0x1FU) & mask;
+				Record(rc, s)
+			}
+			
+			opcode srawx(31, 792, XForm(s, a, b, rc)) {
+				def (s, a, b) = (Reg(s), Reg(a), Reg(b));
+				def mask = Num(0xFFFFFFFFU) >> Ternary(
+					(b & 0x20U) == 0x20U,
+					b & 0x1FU,
+					Num(0U)
+				);
+				def sign = Ternary(
+					(s & 0x80000000U) != 0,
+					Num(0xFFFFFFFFU),
+					Num(0U)
+				);
+				a := (RotR32(s, b & 0x1FU) & mask) | (sign & ~mask);
+				Record(rc, a)
+			}
+			
+			opcode srawix(31, 824, XForm(s, a, sh, rc)) {
+				def s = Reg(s);
+				def mask = Mask32(sh :> int, 31);
+				def sign = Ternary(
+					(s & 0x80000000U) != 0U,
+					Num(0xFFFFFFFFU),
+					Num(0U)
+				);
+				Reg(a) := (RotR32(s, Num(sh)) & mask) | (sign & ~mask);
+				Record(rc, a)
+			}
+			
+			opcode extshx(31, 922, XForm(s, a, _, rc)) {
+				Reg(a) := Signed(Reg(s));
+				Record(rc, a)
+			}
+			
+			opcode extsb(31, 954, XForm(s, a, _, rc)) {
+				def s = Reg(s);
+				Reg(a) := Ternary(
+					(s & 0x80U) != 0U,
+					Num(0xFFFFFF00U),
+					Num(0U)
+				) | (s & 0xFFU);
+				Record(rc, a)
+			}
+		}
+	}
+}

@@ -1,0 +1,197 @@
+using System;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.Macros.IA32 {
+	macro opcode(opcd, body)
+	syntax("opcode", opcd, body) {
+		mutable modrm = (false, <[ () ]>);
+		def Mod_ = Macros.UseSiteSymbol("_mod");
+		def Reg_ = Macros.UseSiteSymbol("_reg");
+		def RM_ = Macros.UseSiteSymbol("_rm");
+		
+		def Mod(size) {
+			<[
+				ParseMod(
+					$(Mod_ : name), 
+					$(RM_ : name),
+					CalcSize($(size : char))
+				)
+			]>
+		}
+		def Reg(size) {
+			<[
+				ParseReg(
+					$(Reg_ : name),
+					CalcSize($(size : char))
+				)
+			]>
+		}
+		def Seg() {
+			<[
+				ParseSeg(
+					$(Reg_ : name)
+				)
+			]>
+		}
+		
+		def ModRM() {
+			unless(modrm[0]) {
+				modrm = (
+					true, 
+					<[ 
+						def (
+							$(Mod_ : name), 
+							$(Reg_ : name), 
+							$(RM_ : name)
+						) = ParseModRM()
+					]>
+				)
+			}
+		}
+		
+		def Imm(size) {
+			def imm = match(size) {
+				| 'b' => <[ NextInstByte() ]>
+				| 'w' => <[ NextInstWord() ]>
+				| 'v' | 'z' => <[ if(_32) NextInstDword() else NextInstWord() ]>
+				| _ => null
+			}
+			<[ IronBabel.CPU.Expr.Num($imm) ]>
+		}
+		
+		def Parse(expr : Parsetree.PExpr) {
+			| null => <[ () ]>
+			
+			| <[ $name = $operand ]> =>
+				def name = Macros.UseSiteSymbol(name.ToString());
+				def operand = operand.ToString();
+				def size = operand[1];
+				def operand = match(operand[0]) {
+					| 'E' =>
+						ModRM();
+						Mod(size)
+					| 'G' =>
+						ModRM();
+						Reg(size)
+					| 'I' =>
+						Imm(size)
+					| 'O' =>
+						def imm = Imm(size);
+						<[
+							IronBabel.CPU.Expr.Memory(
+								CalcSize($(size : char)) << 3,
+								TranslateAddress(
+									(
+										if(_32) IronBabel.CPU.Expr.Num(0U)
+										else (
+											IronBabel.CPU.Expr.Cast(
+												CurSeg, 
+												"uint"
+											) << 4
+										)
+									) + $imm
+								),
+								PC
+							)
+						]>
+					| 'J' =>
+						match(size) {
+							| 'b' =>
+								<[ unchecked((Misc.Sign(NextInstByte(), 8) + (PC :> int)) :> uint) ]>
+							| 'z' =>
+								<[
+									unchecked(
+										(
+											(if(_32) Misc.Sign(NextInstDword(), 32) else Misc.Sign(NextInstWord(), 16)) + 
+											(PC :> int)
+										) :> uint
+									)
+								]>
+							| _ => null
+						}
+					| 'S' =>
+						ModRM();
+						Seg()
+					| _ =>
+						print "Unknown operand {0}" <- operand;
+						null
+				}
+				<[ def $(name : name) = $operand ]>
+			
+			| expr => throw Exception(
+					"Unknown subexpr {0}" <- expr
+				)
+		}
+		
+		def Build(mnem, opcd, a, b, c) {
+			def a = Parse(a);
+			def b = Parse(b);
+			def c = Parse(c);
+			
+			<[
+				Opcode(
+					$opcd :> uint,
+					$(mnem.ToString() : string),
+					fun() : void {
+						$(modrm[1]);
+						$a;
+						$b;
+						$c;
+						$body
+					}
+				)
+			]>
+		}
+		
+		match(opcd) {
+			| <[ $mnem($opcd) ]> =>
+				Build(mnem, opcd, null, null, null)
+			| <[ $mnem($opcd, $a) ]> =>
+				Build(mnem, opcd, a, null, null)
+			| <[ $mnem($opcd, $a, $b) ]> =>
+				Build(mnem, opcd, a, b, null)
+			| <[ $mnem($opcd, $a, $b, $c) ]> =>
+				Build(mnem, opcd, a, b, c)
+			| expr => throw Exception(
+					"Unknown expr {0}" <- expr
+				)
+		}
+	}
+	
+	[Nemerle.MacroUsage(
+		Nemerle.MacroPhase.BeforeInheritance,
+		Nemerle.MacroTargets.Field
+	)]
+	macro VarRegister(tb : TypeBuilder, pf : ParsedField, reg)
+	syntax("varregister", reg) {
+		def (wide, thin) = match(reg) {
+			| <[ ($wide, $thin) ]> =>
+				(wide.ToString(), thin.ToString())
+			| x => throw Exception(
+					"Unknown format {0}" <- x
+				)
+		}
+		
+		def name = pf.name.ToString();
+		pf.ty = <[ byte ]>;
+		pf.name = Splicable.Name(Name("_" + name));
+		pf.modifiers.mods |= NemerleAttributes.Public;
+		
+		tb.Define(
+			<[
+				decl: public $(name : dyn) : Expr {
+					get {
+						if($("_32" : dyn))
+							$(wide : dyn)
+						else
+							$(thin : dyn)
+					}
+				}
+			]>
+		)
+	}
+}

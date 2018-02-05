@@ -1,0 +1,84 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Box;
+using IronBabel.CPU;
+using IronBabel.CPU.CoreSolo;
+using IronBabel.Device.Drive;
+using IronBabel.Device.Drive.ImageDrive;
+using IronBabel.Frontend.SDL;
+using IronBabel.Idb.Run;
+
+namespace IronBabel.Box.PC {
+	public partial class PC : IBox {
+		protected CPU : CoreSolo = CoreSolo();
+		protected BIOS : BIOS;
+		protected Display : SDL;
+		public Running : bool { get { CPU.Running } }
+		
+		public static Main(args : array [string]) : void { Run(Pc, args) }
+		
+		public this(args : array [string]) {
+			Display = SDL(this);
+			
+			def memSize = 128 * 1024; // Kilobyte
+			def physMem = array.[byte](memSize * 1024); // 128MB
+			CPU.MMU.AddPhysicalMapping(
+				Mapping.Physical(
+					0x00000000U,
+					(physMem.Length : int) :> uint,
+					physMem,
+					0
+				)
+			);
+			CPU.MMU.AddPages(0x0U, 0x0U, physMem.Length :> uint, PageFlags.All);
+			
+			InitPIC();
+			
+			CPU.Breakpoints[0x536] = 
+				fun() {
+					when(CPU._Cs == 0x8EC1U :> ushort)
+						CPU.DumpMSDos();
+					true
+				}
+			
+			this.BIOS = IronBabel.Box.PC.BIOS(CPU, memSize);
+			
+			def drive = ImageDrive(args[1]);
+			def (id, dclass) = 
+				match(args[0]) {
+					| "floppy" =>
+						drive.Size = 1474560;
+						drive.BlockSize = 512;
+						drive.Cylinders = 80;
+						drive.Heads = 2;
+						drive.Sectors = 18;
+						(0x00, DriveClass.Floppy)
+					| "cd" | "dvd" =>
+						drive.BlockSize = 2048;
+						(0x81, DriveClass.CD)
+					| _ =>
+						(0x00, DriveClass.None)
+				}
+			this.BIOS.AddDrive(id, dclass, drive);
+			this.BIOS.Boot()
+		}
+		
+		public Start() : void {
+			CPU.Running = true;
+			when(CPU.Execute())
+				Start()
+		}
+		
+		public Shutdown() : void {
+			CPU.Shutdown()
+		}
+		
+		public UpdateDisplay() : void {
+			for(mutable i = 0U; i < 80U * 25U; ++i)
+				Display.BufferChars[i :> int] = CPU.MMU.Mem8[0xB8000U + (i << 1), CPU.PC]
+		}
+	}
+}

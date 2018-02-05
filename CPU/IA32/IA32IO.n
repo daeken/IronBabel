@@ -1,0 +1,45 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel;
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.IA32;
+
+namespace IronBabel.CPU.IA32 {
+	public partial class IA32 : BaseCPU {
+		protected ReadPort8(port : Expr) : Expr {
+			Call(CPU.ReadPort(port :>> uint, Num(8))) :>> byte
+		}
+		
+		protected WritePort8(port : Expr, value : Expr) : void {
+			Emit(Call(CPU.WritePort(port :>> uint, value :>> uint, Num(8))))
+		}
+		
+		protected DefineIOOpcodes() : void {
+			opcode ins(0x6C) {
+				RepCx(
+					quoteblock {
+						Mem8(
+							if(_32)
+								Edi
+							else
+								((Es :>> uint) << 4) + Di
+						) := ReadPort8(Dx)
+					}
+				)
+			}
+			
+			opcode inp(0xE4, port=Ib) {
+				Al := ReadPort8(port)
+			}
+			
+			opcode outp(0xE6, port=Ib) {
+				WritePort8(port, Al)
+			}
+		}
+	}
+}

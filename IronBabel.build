@@ -1,0 +1,421 @@
+<?xml version="1.0"?>
+<project name="IronBabel" default="Build" basedir=".">
+	<description>Universal emulation platform</description>
+	<property name="debug" value="true" overwrite="false" />
+	<target name="clean" description="Clean build directory">
+		<delete failonerror="false">
+			<fileset>
+				<include name="Obj/*.dll" />
+				<include name="Obj/*.exe" />
+				<include name="Obj/*.*db" />
+				<include name="Obj/*.png" />
+				<include name="Obj/*.dot" />
+				<include name="Obj/*.txt" />
+				<include name="Obj/Macros/*.dll" />
+				<include name="Obj/Macros/*.exe" />
+				<include name="Obj/Macros/*.*db" />
+			</fileset>
+		</delete>
+	</target>
+	
+	<target name="Macros" description="Build IronBabel.Macros">
+		<mkdir dir="Obj" />
+		<mkdir dir="Obj/Macros" />
+		<ncc target="library" output="Obj/Macros/IronBabel.Macros.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/Macros/*.n" />
+			</sources>
+			<arg line="-r Nemerle.Compiler.dll -r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Misc" description="Build IronBabel.Misc">
+		<mkdir dir="Obj" />
+		<ncc target="library" output="Obj/IronBabel.Misc.dll" debug="${debug}">
+			<sources>
+				<include name="Misc.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="IA32" description="Build IronBabel.CPU.IA32" depends="Macros, Misc, CPU">
+		<ncc target="library" output="Obj/Macros/IronBabel.CPU.IA32.Macros.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/IA32/Macros/*.n" />
+			</sources>
+			<arg line="-r Nemerle.Compiler.dll -r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+		<ncc target="library" output="Obj/IronBabel.CPU.IA32.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/IA32/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/Macros/IronBabel.Macros.dll" />
+				<include name="Obj/Macros/IronBabel.CPU.IA32.Macros.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+			</references>
+		</ncc>
+		<ncc target="library" output="Obj/Macros/IronBabel.CPU.IA32.Test.Macros.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/IA32/Test/Macros/*.n" />
+			</sources>
+			<arg line="-r Nemerle.Compiler.dll -r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+		<ncc target="library" output="Obj/IronBabel.CPU.IA32.Test.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/IA32/Test/*.n" />
+			</sources>
+			<arg line="-r Nemerle.Compiler.dll -r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/Macros/IronBabel.CPU.IA32.Test.Macros.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.IA32.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+				<include name="C:\Program Files (x86)\NUnit 2.4.8\bin\nunit.framework.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="CoreSolo" description="Build IronBabel.CPU.CoreSolo" depends="Macros, Misc, CPU, IA32">
+		<ncc target="library" output="Obj/IronBabel.CPU.CoreSolo.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/CoreSolo/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/Macros/IronBabel.Macros.dll" />
+				<include name="Obj/Macros/IronBabel.CPU.IA32.Macros.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.IA32.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="PPC" description="Build IronBabel.CPU.PPC" depends="Macros, Misc, CPU">
+		<ncc target="library" output="Obj/Macros/IronBabel.CPU.PPC.Macros.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/PPC/Macros/*.n" />
+			</sources>
+			<arg line="-r Nemerle.Compiler.dll -r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+		<ncc target="library" output="Obj/IronBabel.CPU.PPC.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/PPC/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/Macros/IronBabel.Macros.dll" />
+				<include name="Obj/Macros/IronBabel.CPU.PPC.Macros.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="PPC7447" description="Build IronBabel.CPU.PPC7447" depends="Macros, Misc, CPU, PPC">
+		<ncc target="library" output="Obj/IronBabel.CPU.PPC7447.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/PPC7447/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/Macros/IronBabel.Macros.dll" />
+				<include name="Obj/Macros/IronBabel.CPU.PPC.Macros.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.PPC.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="WiiCPU" description="Build IronBabel.CPU.WiiCPU" depends="Macros, Misc, CPU, PPC">
+		<ncc target="library" output="Obj/IronBabel.CPU.WiiCPU.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/WiiCPU/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/Macros/IronBabel.Macros.dll" />
+				<include name="Obj/Macros/IronBabel.CPU.PPC.Macros.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.PPC.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="CPU" description="Build IronBabel.CPU" depends="Macros, Misc">
+		<ncc target="library" output="Obj/IronBabel.CPU.dll" debug="${debug}">
+			<sources>
+				<include name="CPU/*.n" />
+			</sources>
+			<arg line="-r Nemerle.Compiler.dll -r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/Macros/IronBabel.Macros.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="CPUs" description="Build IronBabel.CPU" depends="CPU, CoreSolo, IA32, PPC, PPC7447, WiiCPU" />
+	
+	<target name="ImageDrive" description="Build IronBabel.Device.Drive.ImageDrive" depends="Drive">
+		<ncc target="library" output="Obj/IronBabel.Device.Drive.ImageDrive.dll" debug="${debug}">
+			<sources>
+				<include name="Device/Drive/ImageDrive/*" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Device.Drive.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Drive" description="Build IronBabel.Device.Drive" depends="">
+		<ncc target="library" output="Obj/IronBabel.Device.Drive.dll" debug="${debug}">
+			<sources>
+				<include name="Device/Drive/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Drives" description="Build IronBabel.Device.Drive" depends="Drive, ImageDrive" />
+	
+	<target name="Device" description="Build IronBabel.Device" depends="">
+		<ncc target="library" output="Obj/IronBabel.Device.dll" debug="${debug}">
+			<sources>
+				<include name="Device/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Devices" description="Build IronBabel.Device" depends="Device, Drives" />
+	
+	<target name="APM" description="Build IronBabel.Filesystem.PartitionMap.APM" depends="Misc, Filesystem, HFSPlus, PartitionMap">
+		<ncc target="library" output="Obj/IronBabel.Filesystem.PartitionMap.APM.dll" debug="${debug}">
+			<sources>
+				<include name="Filesystem/PartitionMap/APM/*" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Device.Drive.dll" />
+				<include name="Obj/IronBabel.Filesystem.dll" />
+				<include name="Obj/IronBabel.Filesystem.HFSPlus.dll" />
+				<include name="Obj/IronBabel.Filesystem.PartitionMap.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="PartitionMap" description="Build IronBabel.Filesystem.PartitionMap" depends="Drive">
+		<ncc target="library" output="Obj/IronBabel.Filesystem.PartitionMap.dll" debug="${debug}">
+			<sources>
+				<include name="Filesystem/PartitionMap/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Filesystem.dll" />
+				<include name="Obj/IronBabel.Device.Drive.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="PartitionMaps" description="Build IronBabel.Filesystem.PartitionMaps" depends="PartitionMap, APM" />
+	
+	<target name="HFSPlus" description="Build IronBabel.Filesystem.HFSPlus" depends="Drive, Filesystem">
+		<ncc target="library" output="Obj/IronBabel.Filesystem.HFSPlus.dll" debug="${debug}">
+			<sources>
+				<include name="Filesystem/HFSPlus/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Filesystem.dll" />
+				<include name="Obj/IronBabel.Device.Drive.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Filesystem" description="Build IronBabel.Filesystem" depends="">
+		<ncc target="library" output="Obj/IronBabel.Filesystem.dll" debug="${debug}">
+			<sources>
+				<include name="Filesystem/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Filesystems" description="Build IronBabel.Filesystem" depends="Filesystem, HFSPlus, PartitionMaps" />
+	
+	<target name="SDL" description="Build IronBabel.Frontend.SDL" depends="Box">
+		<ncc target="library" output="Obj/IronBabel.Frontend.SDL.dll" debug="${debug}">
+			<sources>
+				<include name="Frontend/SDL/*.n" />
+			</sources>
+			<arg line="-r System.Drawing -r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<lib>
+					<include name="C:\Program Files (x86)\SdlDotNet\bin" />
+				</lib>
+				<include name="SdlDotNet.dll" />
+				<include name="Obj/IronBabel.Box.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Frontends" description="Build IronBabel.Frontend" depends="SDL" />
+	
+	<target name="Box" description="Build IronBabel.Box" depends="">
+		<ncc target="library" output="Obj/IronBabel.Box.dll" debug="${debug}">
+			<sources>
+				<include name="Box/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Idb" description="Build IronBabel.Idb" depends="Box, CPU">
+		<ncc target="library" output="Obj/IronBabel.Idb.dll" debug="${debug}">
+			<sources>
+				<include name="Idb/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Box.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="BIOS" description="Build IronBabel.Box.PC" depends="IA32">
+		<ncc target="library" output="Obj/IronBabel.Box.PC.BIOS.dll" debug="${debug}">
+			<sources>
+				<include name="Box/PC/BIOS/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.IA32.dll" />
+				<include name="Obj/IronBabel.Device.Drive.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="PC" description="Build IronBabel.Box.PC" depends="Box, Idb, BIOS, CoreSolo, ImageDrive, SDL">
+		<ncc target="exe" output="Obj/PC.exe" debug="${debug}">
+			<sources>
+				<include name="Box/PC/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Box.dll" />
+				<include name="Obj/IronBabel.Box.PC.BIOS.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.CoreSolo.dll" />
+				<include name="Obj/IronBabel.Device.Drive.dll" />
+				<include name="Obj/IronBabel.Device.Drive.ImageDrive.dll" />
+				<include name="Obj/IronBabel.Frontend.SDL.dll" />
+				<include name="Obj/IronBabel.Idb.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="PowerMacG4" description="Build IronBabel.Box.PowerMacG4" depends="Box, Idb, PPC7447, ImageDrive, APM">
+		<ncc target="exe" output="Obj/PowerMacG4.exe" debug="${debug}">
+			<sources>
+				<include name="Box/PowerMacG4/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Box.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.PPC7447.dll" />
+				<include name="Obj/IronBabel.Device.Drive.ImageDrive.dll" />
+				<include name="Obj/IronBabel.Filesystem.PartitionMap.APM.dll" />
+				<include name="Obj/IronBabel.Idb.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Wii" description="Build IronBabel.Box.Wii" depends="Box, Idb, Device, Misc, WiiCPU">
+		<ncc target="exe" output="Obj/Wii.exe" debug="${debug}">
+			<sources>
+				<include name="Box/Wii/*.n" />
+				<include name="Box/Wii/IOS/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Box.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.WiiCPU.dll" />
+				<include name="Obj/IronBabel.Device.dll" />
+				<include name="Obj/IronBabel.Idb.dll" />
+				<include name="Obj/IronBabel.Misc.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Xbox" description="Build IronBabel.Box.Xbox" depends="Box, Idb, CoreSolo">
+		<ncc target="library" output="Obj/Macros/IronBabel.Box.Xbox.Macros.dll" debug="${debug}">
+			<sources>
+				<include name="Box/Xbox/Kernel/Macros/*.n" />
+			</sources>
+			<arg line="-r Nemerle.Compiler.dll -r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.CPU.dll" />
+			</references>
+		</ncc>
+		<ncc target="exe" output="Obj/Xbox.exe" debug="${debug}">
+			<sources>
+				<include name="Box/Xbox/*.n" />
+				<include name="Box/Xbox/Kernel/*.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+			<references>
+				<include name="Obj/IronBabel.Box.dll" />
+				<include name="Obj/Macros/IronBabel.Box.Xbox.Macros.dll" />
+				<include name="Obj/IronBabel.CPU.dll" />
+				<include name="Obj/IronBabel.CPU.CoreSolo.dll" />
+				<include name="Obj/IronBabel.Idb.dll" />
+			</references>
+		</ncc>
+	</target>
+	
+	<target name="Boxes" description="Build IronBabel.Box" depends="Box, PC, PowerMacG4, Wii, Xbox" />
+	
+	<target name="XboxTools" description="Build the Xbox tools">
+		<ncc target="exe" output="Obj/FatxUnpack.exe" debug="${debug}">
+			<sources>
+				<include name="Tools/Xbox/FatxUnpack.n" />
+			</sources>
+			<arg line="-r ../Nextem/Obj/Nextem.dll -m ../Nextem/Obj/Nextem.Macros.dll" />
+		</ncc>
+	</target>
+	
+	<target name="Tools" description="Build the tools" depends="XboxTools" />
+	
+	<target name="Build" description="Build IronBabel" depends="Macros, Misc, CPUs, Devices, Filesystems, Frontends, Idb, Boxes, Tools" />
+</project>

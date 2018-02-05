@@ -1,0 +1,165 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel;
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.IA32;
+
+namespace IronBabel.CPU.IA32 {
+	public partial class IA32 : BaseCPU {
+		public static CF : uint = 1U;
+		public static PF : uint = 1U << 2;
+		public static AF : uint = 1U << 4;
+		public static ZF : uint = 1U << 6;
+		public static SF : uint = 1U << 7;
+		public static OF : uint = 1U << 11;
+		
+		protected Cmp(left : Expr, right : Expr) : void {
+			EFlags := Call(CPU.Cmp(left, right))
+		}
+		
+		public Cmp(left : uint, right : uint) : uint {
+			mutable eflags = _EFlags & ~(CF | PF | AF | ZF | SF);
+			
+			when(left == right)
+				eflags |= ZF;
+			
+			when(left < right)
+				eflags |= CF;
+			
+			unchecked {
+				when((left :> int) < (right :> int))
+					eflags |= SF
+			}
+			
+			eflags
+		}
+		
+		protected Test(left : Expr, right : Expr) : void {
+			EFlags := Call(CPU.Test(left, right, SNum(left.Size)))
+		}
+		
+		public Test(left : uint, right : uint, size : uint) : uint {
+			mutable eflags = _EFlags & ~(CF | PF | AF | ZF | SF);
+			
+			def temp = left & right;
+			def size = size :> int;
+			when((temp >> (size - 1)) == 1U)
+				eflags |= SF;
+			when(temp == 0U)
+				eflags |= ZF;
+			
+			eflags
+		}
+		
+		protected DefineCompareOpcodes() : void {
+			opcode cmp(0x38, dest=Eb, src=Gb) {
+				Cmp(dest, src)
+			}
+			
+			opcode cmp(0x39, dest=Ev, src=Gv) {
+				Cmp(dest, src)
+			}
+			
+			opcode cmp(0x3A, dest=Gb, src=Eb) {
+				Cmp(dest, src)
+			}
+			
+			opcode cmp(0x3B, dest=Gv, src=Ev) {
+				Cmp(dest, src)
+			}
+			
+			opcode cmp(0x3C, src=Ib) {
+				Cmp(Al, src)
+			}
+			
+			opcode cmp(0x3D, src=Iz) {
+				Cmp(VAx, src)
+			}
+			
+			opcode test(0x84, src=Eb, dest=Gb) {
+				Test(src, dest)
+			}
+			
+			opcode test(0x85, src=Ev, dest=Gv) {
+				Test(src, dest)
+			}
+			
+			opcode cmps(0xA6) {
+				RepCxZf(
+					quoteblock {
+						if(_32)
+							Cmp(
+								Mem8(Edi),
+								Mem8(Esi)
+							);
+						else
+							Cmp(
+								Mem8(((Es :>> uint) << 4) + Di),
+								Mem8(((Ds :>> uint) << 4) + Si)
+							);
+						VDi := VDi + 1;
+						VSi := VSi + 1
+					}
+				)
+			}
+			
+			opcode cmps(0xA7) {
+				RepCxZf(
+					quoteblock {
+						if(_32)
+							Cmp(
+								Mem32(Edi),
+								Mem32(Esi)
+							);
+						else
+							Cmp(
+								Mem16(((Es :>> uint) << 4) + Di),
+								Mem16(((Ds :>> uint) << 4) + Si)
+							);
+						VDi := VDi + 2;
+						VSi := VSi + 2
+					}
+				)
+			}
+			
+			opcode test(0xA8, src=Ib) {
+				Test(Al, src)
+			}
+			
+			opcode test(0xA9, src=Iz) {
+				Test(VAx, src)
+			}
+			
+			opcode scasb(0xAE) {
+				RepCxZf(
+					quoteblock {
+						if(_32)
+							Cmp(
+								Al,
+								Mem8(Edi)
+							);
+						else
+							Cmp(
+								Al,
+								Mem8(((Es :>> uint) << 4) + Di)
+							);
+						VDi := VDi + 1
+					}
+				)
+			}
+			
+			opcode clc(0xF8) {
+				EFlags := EFlags & ~CF
+			}
+			
+			opcode stc(0xF9) {
+				EFlags := EFlags | CF
+			}
+		}
+	}
+}

@@ -1,0 +1,66 @@
+This file is our faux-ticket system.  Please keep it up to date.
+
+Block Aggregator
+================
+
+Summary: IronBabel works by recompiling basic blocks into functions.  A basic
+block is a series of instructions ending with a branch.  We recompile basic
+blocks into functions that execute the equivalent instructions and then return
+the address of the next block to execute.  This is simple but introduces
+overhead there's a number of function calls, a hashtable lookup, and another
+call to get to the next block.  To cut this overhead out, we aggregate basic
+blocks into a finite state machine.
+
+Affected code: BaseCPU.
+
+Progress: This is implemented but still needs a thread to pass over the cache
+and aggregate blocks at runtime.
+
+Implementation details: The first pass implementation (without state caching)
+should emit code as follows:
+public class Decompiled {
+	public static Block(CPU : ..., MMU : ...) : uint {
+		mutable handled = true;
+		CPU.PC = match(CPU.PC) {
+			| 0xDEADBEEFU =>
+				unchecked {
+					print "Block DEADBEEF";
+					CPU._LR
+				}
+			| 0xCAFEBABEU =>
+				unchecked {
+					CPU._LR = 0xCAFEBABEU+4U;
+					0xDEADBEEF
+				}
+			| pc => // Anything else
+				handled = false;
+				pc
+		};
+		
+		if(handled)
+			Block(CPU, MMU)
+		else
+			CPU.PC
+	}
+}
+
+
+Code Caching
+============
+
+Summary: A layer needs to be added to cache the decompiled Expr trees to disk
+to speed up subsequent runs.  Each cache entry should store the beginning and
+end addresses of the recompiled block, a 'valid' flag (defaulting to true), the
+CRC32 of the block, and the recompiled function.
+
+Affected code: BaseCPU, Expr
+
+Progress: A prototype caching layer has been implemented.
+
+Implementation details:  There are a number of things to keep in mind here:
+1) When an invalidation occurs, the valid flag for all functions in the
+affected area should be set to false.
+2) When a cache access occurs and the valid flag is false, the CRC32 should be
+checked.  If it matches, the valid flag is set to true and the recompiled
+function is returned.  If it doesn't match, the cache entry is removed and the
+block is recompiled as usual.

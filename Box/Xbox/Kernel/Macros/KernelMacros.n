@@ -1,0 +1,79 @@
+using System;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+
+namespace IronBabel.Box.Xbox.Kernel {
+	module OrdinalKeeper {
+		public Ordinals : Hashtable [int, PExpr] = Hashtable();
+	}
+	
+	[Nemerle.MacroUsage(
+		Nemerle.MacroPhase.WithTypedMembers,
+		Nemerle.MacroTargets.Method
+	)]
+	macro XboxApi(t : TypeBuilder, m : MethodBuilder, ord : int)
+	syntax("xboxapi", ord) {
+		def header = m.Header;
+		
+		def build(parms, sp, accum=[]) {
+			match(parms) {
+				| [] => accum.Reverse()
+				| head :: tail =>
+					def val = <[ CPU.MMU.Mem32[CPU._Esp + $(sp : uint), 0U] ]>;
+					def ty = head.SystemType.ToString();
+					build(
+						tail, 
+						sp + 4U,
+						(
+							if(ty.StartsWith("IronBabel.CPU.pointer"))
+								<[ if($val == 0U) null else IronBabel.CPU.pointer(CPU.MMU, $val) ]>
+							else {
+								def val = 
+									match(ty) {
+										| "System.Boolean" => <[ $val != 0U ]>
+										| "System.SByte" => <[ $val :> sbyte ]>
+										| "System.Byte" => <[ $val :> byte ]>
+										| "System.Int16" => <[ $val :> short ]>
+										| "System.UInt16" => <[ $val :> ushort ]>
+										| "System.Int32" => <[ $val :> int ]>
+										| "System.UInt32" => val
+										| x => throw Exception(
+												"Unsupported kernel parameter type {0}" <- x
+											)
+									}
+								<[ unchecked($val) ]>
+							}
+						) :: accum
+					)
+			}
+		}
+		
+		def parms = <[ CPU ]> :: build(header.parms.Tail, 4U);
+		
+		OrdinalKeeper.Ordinals[ord] = <[ $(m.Name : dyn) ]>;
+		t.Define(
+			<[ decl:
+				public $(m.Name : dyn) (CPU : IronBabel.CPU.CoreSolo.CoreSolo) : void {
+					_ = $(m.Name : dyn) ( .. $parms );
+					CPU.PC = CPU.MMU.Mem32[CPU._Esp, 0U];
+					CPU._Esp += $(header.parms.Length :> uint : uint) << 2;
+				}
+			]>
+		)
+	}
+	
+	macro SetupAPIs() {
+		mutable setters = [];
+		
+		foreach(pair in OrdinalKeeper.Ordinals)
+			setters ::= <[ APIs[$(pair.Key : int)] = $(pair.Value) ]>;
+		
+		<[ { .. $setters } ]>
+	}
+}

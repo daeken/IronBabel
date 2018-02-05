@@ -1,0 +1,25 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.CPU.IA32;
+
+namespace IronBabel.CPU.CoreSolo {
+	public class CoreSolo : IA32 {
+		public this() {
+			base();
+			MMU = BaseMMU(true, 4096);
+			CPUType = "CoreSolo";
+			_ = CompilerParams.ReferencedAssemblies.Add(ObjPath + "IronBabel.CPU.CoreSolo.dll");
+			Using = "IronBabel.CPU.CoreSolo" :: Using;
+			Params = array[this : object, MMU];
+		}
+		
+		public override Clone() : BaseCPU {
+			CoreSolo().CopyFrom(this)
+		}
+	}
+}

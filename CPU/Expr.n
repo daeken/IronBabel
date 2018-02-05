@@ -1,0 +1,812 @@
+using System;
+using System.IO;
+using System.Text;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Macros;
+using IronBabel.Misc;
+
+namespace IronBabel.CPU {
+	public variant EArith {
+		| Or
+		| Xor
+		| And
+		| Shr
+		| Shl
+		| Add
+		| Sub
+		| Mul
+		| Div
+		| Mod
+		| Not
+		
+		public override ToString() : string {
+			match(this) {
+				| Or   => "|"
+				| Xor  => "^"
+				| And  => "&"
+				| Shr => ">>"
+				| Shl  => "<<"
+				| Add  => "+"
+				| Sub  => "-"
+				| Mul  => "*"
+				| Div => "/"
+				| Mod => "%"
+				| Not => "~"
+			}
+		}
+		
+		public static FromString(str : string) : EArith {
+			| "|" => Or()
+			| "^" => Xor()
+			| "&" => And()
+			| ">>" => Shr()
+			| "<<" => Shl()
+			| "+" => Add()
+			| "-" => Sub()
+			| "*" => Mul()
+			| "/" => Div()
+			| "%" => Mod()
+			| "~" => Not()
+			| _ => null
+		}
+	}
+	
+	public variant EComp {
+		| EQ
+		| NE
+		| GT
+		| LT
+		| GE
+		| LE
+		
+		public override ToString() : string {
+			match(this) {
+				| EQ => "=="
+				| NE => "!="
+				| GT => ">"
+				| LT => "<"
+				| GE => ">="
+				| LE => "<="
+			}
+		}
+		
+		public static FromString(str : string) : EComp {
+			| "==" => EQ()
+			| "!=" => NE()
+			| ">"  => GT()
+			| "<"  => LT()
+			| ">=" => GE()
+			| "<=" => LE()
+			| _ => null
+		}
+	}
+	
+	public variant Expr {
+		| Block {
+			BlockExprs : list [Expr];
+		}
+		| Num {
+			NumVal : uint;
+		}
+		| SNum {
+			SNumVal : int;
+		}
+		| FNum {
+			FNumVal : Single;
+		}
+		| DNum {
+			DNumVal : Double;
+		}
+		| Memory {
+			MemSize : int;
+			MemAddr : Expr;
+			MemPC : uint;
+		}
+		| FPMemory {
+			FPMemSize : int;
+			FPMemAddr : Expr;
+			FPMemPC : uint;
+		}
+		| Assign {
+			AssLeft : Expr;
+			AssRight : Expr;
+		}
+		| Arith {
+			ArithType : EArith;
+			ArithLeft : Expr;
+			ArithRight : Expr;
+		}
+		| Compare {
+			CompType : EComp;
+			CompLeft : Expr;
+			CompRight : Expr;
+		}
+		| If {
+			IfCond : Expr;
+			IfTaken : Expr;
+			IfNot : Expr;
+		}
+		| Ternary {
+			TernaryCond : Expr;
+			TernaryTaken : Expr;
+			TernaryNot : Expr;
+		}
+		| LAnd {
+			LAndLeft : Expr;
+			LAndRight : Expr;
+		}
+		| LOr {
+			LOrLeft : Expr;
+			LOrRight : Expr;
+		}
+		| Cast {
+			CastExpr : Expr;
+			CastType : string;
+		}
+		| Signed {
+			SignExpr : Expr;
+		}
+		| Call_ {
+			CallReturn : string;
+			CallTarget : string;
+			Args : list [Expr];
+		}
+		| Var {
+			VarName : string;
+			VarSize : int;
+		}
+		| Index {
+			IndBase : Expr;
+			IndIndex : Expr;
+		}
+		| Member {
+			MemBase : Expr;
+			MemMember : Expr;
+		}
+		| While {
+			WhileCond : Expr;
+			WhileBody : Expr;
+		}
+		| Break
+		| String {
+			StringValue : string;
+		}
+		
+		public Size : int {
+			get {
+				match(this) {
+					| Memory(size, _, _)
+					| FPMemory(size, _, _)
+					| Var(_, size) =>
+						size
+					| Num(_)
+					| SNum(_) =>
+						32
+					| x =>
+						throw Exception(
+							"Couldn't get size of {0}" <- x
+						)
+				}
+			}
+		}
+		
+		public static ToExpr(expr : Expr) : Expr { expr }
+		public static ToExpr(num : uint) : Expr { Num(num) }
+		public static ToExpr(num : int) : Expr {
+			if(num < 0)
+				SNum(num)
+			else
+				Num(num :> uint)
+		}
+		public static ToExpr(num : Single) : Expr { FNum(num) }
+		public static ToExpr(num : Double) : Expr { DNum(num) }
+		public static ToExpr(val : string) : Expr { String(val) }
+		public static ToExpr(expr : object) : Expr {
+			| expr is Expr => expr
+			| expr is int => ToExpr(expr)
+			| expr is uint => ToExpr(expr)
+			| expr is Single => ToExpr(expr)
+			| expr is Double => ToExpr(expr)
+			| expr is string => ToExpr(expr)
+			| expr => throw Exception(
+					"Cannot convert {0}({1}) to Expr" <- (
+						expr,
+						expr.GetType()
+					)
+				)
+		}
+		
+		public AsNum() : uint {
+			match(this) {
+				| Num(num) => num
+				| _ => throw Exception(
+					"Expression {0} cannot be converted to a number" <- this
+				)
+			}
+		}
+		
+		public static Sign(num : uint, size : int) : Expr {
+			def num : int = Sign(num, size);
+			if(num >= 0)
+				Num(num :> uint)
+			else
+				SNum(num)
+		}
+		
+		public SignExtend(tosize : int, fromsize : int) : Expr {
+			Call(Misc.SignExtend(this, SNum(tosize), SNum(fromsize)))
+		}
+		
+		public Walk(func : Expr -> object) : bool {
+			def WalkList(exprs) {
+				| [] => false
+				| head :: tail =>
+					if(head.Walk(func))
+						true
+					else
+						WalkList(tail)
+			}
+			
+			def temp = func(this);
+			if(temp == null)
+				false
+			else if(temp :> bool == true)
+				true
+			else
+				match(this) {
+					| Block(exprs)
+					| Call_(_, _, exprs) =>
+						WalkList(exprs)
+					| Memory(_, expr, _)
+					| Cast(expr, _)
+					| Signed(expr) =>
+						expr.Walk(func)
+					| Assign(left, right)
+					| Arith(_, left, right)
+					| Compare(_, left, right)
+					| LAnd(left, right)
+					| LOr(left, right) =>
+						if(right : object == null)
+							left.Walk(func)
+						else
+							left.Walk(func) || right.Walk(func)
+					| _ => false
+				}
+		}
+		
+		public IsSigned() : bool {
+			this.Walk(
+				fun(expr : Expr) : object {
+					| Signed => true : object
+					| Call_(ret, _, _) =>
+						if(ret == "int")
+							true : object
+						else if(ret == "")
+							false : object
+						else
+							null
+					| _ => false : object
+				}
+			)
+		}
+		
+		public override ToString() : string { ToString(1) };
+		public ToString(tabs : int) : string {
+			match(this) {
+				| Block(exprs) =>
+					def Retab(arr : array [string]) {
+						mutable ret = "";
+						foreach(line in arr) {
+							unless(line.Length == 0) {
+								ret += String('\t', tabs);
+								ret += line + "\n";
+							}
+						}
+						ret
+					}
+					
+					def BuildBlock(exprs, accum="") {
+						match(exprs) {
+							| [] => accum
+							| head :: tail =>
+								BuildBlock(
+									tail,
+									head.ToString() + 
+									";\n" + accum
+								)
+						}
+					}
+					
+					Retab(
+						BuildBlock(exprs).Split('\n')
+					)
+				
+				| Num(num) => "0x{0:X}U" <- num
+				| SNum(num) =>
+					"0x{0:X}U" <- (
+						if(num >= 0)
+							num :> uint
+						else
+							~((-num :> uint) - 1)
+					)
+				| FNum(num) => "{0}f" <- num
+				| DNum(num) => "{0}d" <- num
+				| Memory(size, address, pc) => "MMU.get_Mem{0}((uint) {1}, 0x{2:X}U)" <- (size, address, pc)
+				| FPMemory(size, address, pc) => "MMU.get_FPMem{0}((uint) {1}, 0x{2:X}U)" <- (size, address, pc)
+				| Assign(left, right) =>
+					def right = {
+						if(right.IsSigned())
+							Call(Misc.Unsign(right) : uint)
+						else
+							right
+					};
+					def right = match(left) {
+						| Var(_, size)
+						| Memory(size, _, _) =>
+							def ctype = match(size) {
+								| 8 => "byte"
+								| 16 => "ushort"
+								| _ => null
+							}
+							
+							if(ctype == null)
+								right
+							else
+								Cast(right, ctype)
+						| _ => right
+					}; 
+					match(left) {
+						| Memory(size, addr, pc) =>
+							"MMU.set_Mem{0}((uint) {1}, 0x{2:X}U, {3})" <- (
+								size,
+								addr,
+								pc,
+								right
+							)
+						| FPMemory(size, addr, pc) =>
+							"MMU.set_FPMem{0}((uint) {1}, 0x{2:X}U, {3})" <- (
+								size,
+								addr,
+								pc,
+								right
+							)
+						| _ =>
+							"{0} = {1}" <- (
+								left, 
+								right
+							)
+					}
+				| Arith(atype, left, right) =>
+					if(right : object == null)
+						"{0}({1})" <- (
+							atype,
+							left
+						)
+					else
+						"({0}) {1} ({2})" <- (
+							left, 
+							atype,
+							match(atype) {
+								| Shl | Shr =>
+									right :>> int
+								
+								| _ => right : object
+							}
+						)
+				| Compare(ctype, left, right) => "({0}) {1} ({2})" <- (left, ctype, right)
+				| If(cond, taken, not) =>
+					"if({0}) {{\n{1}\n}} else {{\n{2}\n}}" <- (
+						cond,
+						taken,
+						not
+					)
+				| While(cond, body) =>
+					"while({0}) {{\n{1}\n}}" <- (
+						cond,
+						body
+					)
+				| Ternary(cond, taken, not) =>
+					"({0}) ? ({1}) : ({2})" <- (
+						cond,
+						taken,
+						not
+					)
+				| LAnd(left, right) => "({0}) && ({1})" <- (left, right)
+				| LOr(left, right) => "({0}) || ({1})" <- (left, right)
+				| Cast(expr, to) => "(({1}) ({0}))" <- (expr, to)
+				| Signed(expr) => "Misc.Sign({0}, 32)" <- (expr)
+				| Call_(_, target, args) =>
+					def MakeArgs(args, accum) {
+						match(args) {
+							| [] => accum
+							| head :: tail =>
+								MakeArgs(
+									tail,
+									"{1}{0}{2}" <- (
+										head,
+										accum,
+										match(tail) {
+											| [] => ""
+											| _ => ", "
+										}
+									)
+								)
+						}
+					}
+					
+					"{0}({1})" <- (
+						target,
+						MakeArgs(args, "")
+					)
+				
+				| Var(name, _) => name
+				| Index(ibase, ind) =>
+					"{0}[{1}]" <- (
+						ibase,
+						match(ind) {
+							| SNum(num) =>
+								num.ToString()
+							| ind => 
+								(ind :>> int).ToString()
+						}
+					)
+				| Member(mbase, mem) =>
+					"{0}.{1}" <- (
+						mbase,
+						mem
+					)
+				| Break() =>
+					"break;"
+				| String(str) =>
+					mutable repr = "\"";
+					foreach(c in str)
+						repr +=
+							if(
+								(c >= 'a' && c <= 'z') ||
+								(c >= 'A' && c <= 'Z') ||
+								(c >= 'A' && c <= '9')
+							)
+								c.ToString();
+							else
+								"\\x{0:X2}" <- (c & 0xFF);
+					repr + "\""
+			}
+		}
+		
+		public ToBinary(stream : Stream) : void {
+			def WriteNum(num : uint) {
+				stream.Write(
+					BitConverter.GetBytes(num),
+					0,
+					4
+				)
+			}
+			def WriteSNum(num) {
+				WriteNum(Unsign(num))
+			}
+			def WriteString(str) {
+				WriteSNum(str.Length);
+				def temp = ASCIIEncoding().GetBytes(str);
+				stream.Write(
+					temp,
+					0,
+					temp.Length
+				)
+			}
+			
+			def WriteList(exprs) {
+				def Sub(exprs) {
+					| [] => ()
+					| head :: tail =>
+						head.ToBinary(stream);
+						Sub(tail)
+				}
+				WriteSNum(exprs.Length);
+				Sub(exprs)
+			}
+			
+			match(this) {
+				| Block(exprs) =>
+					WriteNum(1U);
+					WriteList(exprs)
+				
+				| Num(num) =>
+					WriteNum(2U);
+					WriteNum(num)
+				
+				| SNum(num) =>
+					WriteNum(3U);
+					WriteSNum(num)
+				
+				| FNum(num) =>
+					WriteNum(4U);
+					stream.Write(
+						BitConverter.GetBytes(num),
+						0,
+						4
+					)
+				
+				| DNum(num) =>
+					WriteNum(5U);
+					stream.Write(
+						BitConverter.GetBytes(num),
+						0,
+						8
+					)
+				
+				| Memory(size, addr, pc) =>
+					WriteNum(6U);
+					WriteSNum(size);
+					addr.ToBinary(stream);
+					WriteNum(pc)
+				
+				| FPMemory(size, addr, pc) =>
+					WriteNum(7U);
+					WriteSNum(size);
+					addr.ToBinary(stream);
+					WriteNum(pc)
+				
+				| Assign(left, right) =>
+					WriteNum(8U);
+					left.ToBinary(stream);
+					right.ToBinary(stream)
+				
+				| Arith(atype, left, right) =>
+					WriteNum(9U);
+					WriteString(atype.ToString());
+					left.ToBinary(stream);
+					if(right : object == null)
+						WriteNum(0U)
+					else
+						right.ToBinary(stream)
+				
+				| Compare(ctype, left, right) =>
+					WriteNum(10U);
+					WriteString(ctype.ToString());
+					left.ToBinary(stream);
+					right.ToBinary(stream)
+				
+				| If(cond, taken, not) =>
+					WriteNum(11U);
+					cond.ToBinary(stream);
+					taken.ToBinary(stream);
+					def not = 
+						if(not == null) Block([])
+						else not;
+					not.ToBinary(stream)
+				
+				| LAnd(left, right) =>
+					WriteNum(12U);
+					left.ToBinary(stream);
+					right.ToBinary(stream)
+				
+				| LOr(left, right) =>
+					WriteNum(13U);
+					left.ToBinary(stream);
+					right.ToBinary(stream)
+				
+				| Cast(expr, ctype) =>
+					WriteNum(14U);
+					expr.ToBinary(stream);
+					WriteString(ctype)
+				
+				| Signed(expr) =>
+					WriteNum(15U);
+					expr.ToBinary(stream)
+				
+				| Call_(ret, target, exprs) =>
+					WriteNum(16U);
+					WriteString(ret);
+					WriteString(target);
+					WriteList(exprs)
+				
+				| Var(name, size) =>
+					WriteNum(17U);
+					WriteString(name);
+					WriteSNum(size)
+				
+				| Index(ibase, index) =>
+					WriteNum(18U);
+					ibase.ToBinary(stream);
+					index.ToBinary(stream)
+				
+				| Member(mbase, mem) =>
+					WriteNum(19U);
+					mbase.ToBinary(stream);
+					mem.ToBinary(stream)
+				
+				| Ternary(cond, taken, not) =>
+					WriteNum(20U);
+					cond.ToBinary(stream);
+					taken.ToBinary(stream);
+					not.ToBinary(stream)
+				
+				| While(cond, body) =>
+					WriteNum(21U);
+					cond.ToBinary(stream);
+					body.ToBinary(stream)
+				
+				| Break() =>
+					WriteNum(22U)
+				
+				| String(strval) =>
+					WriteNum(23U);
+					WriteString(strval)
+			}
+		}
+		
+		public static FromBinary(stream : Stream) : Expr {
+			def temp = array(8);
+			def ReadNum() : uint {
+				unless(stream.Read(temp, 0, 4) == 4)
+					throw Exception("Done");
+				BitConverter.ToUInt32(temp, 0)
+			}
+			def ReadSNum() : int {
+				Sign(ReadNum(), 32)
+			}
+			def ReadString() {
+				def len = ReadSNum();
+				if(len == 0)
+					""
+				else {
+					def temp = array(len);
+					unless(stream.Read(temp, 0, temp.Length) != 0)
+						throw Exception("Done");
+					ASCIIEncoding().GetString(temp)
+				}
+			}
+			def ReadList() {
+				def Sub(count, accum) {
+					match(count) {
+						| 0 => accum
+						| _ =>
+							Sub(
+								count - 1,
+								FromBinary(stream) :: accum
+							)
+					}
+				}
+				Sub(ReadSNum(), []).Reverse()
+			}
+			
+			match(ReadNum()) {
+				| 0U => null
+				| 1U => Block(ReadList())
+				| 2U => Num(ReadNum())
+				| 3U => SNum(ReadSNum())
+				| 4U => FNum(
+						{
+							_ = stream.Read(temp, 0, 4);
+							BitConverter.ToSingle(temp, 0)
+						}
+					)
+				| 5U => DNum(
+						{
+							_ = stream.Read(temp, 0, 8);
+							BitConverter.ToDouble(temp, 0)
+						}
+					)
+				| 6U => Memory(ReadSNum(), FromBinary(stream), ReadNum())
+				| 7U => FPMemory(ReadSNum(), FromBinary(stream), ReadNum())
+				| 8U => Assign(FromBinary(stream), FromBinary(stream))
+				| 9U => Arith(
+						EArith.FromString(ReadString()),
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 10U => Compare(
+						EComp.FromString(ReadString()),
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 11U => If(
+						FromBinary(stream),
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 12U => LAnd(
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 13U => LOr(
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 14U => Cast(
+						FromBinary(stream),
+						ReadString()
+					)
+				| 15U => Signed(
+						FromBinary(stream)
+					)
+				| 16U => Call_(
+						ReadString(),
+						ReadString(),
+						ReadList()
+					)
+				| 17U => Var(
+						ReadString(), ReadSNum()
+					)
+				| 18U => Index(
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 19U => Member(
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 20U => Ternary(
+						FromBinary(stream),
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 21U => While(
+						FromBinary(stream),
+						FromBinary(stream)
+					)
+				| 22U => Break()
+				| 23U =>
+					String(
+						ReadString()
+					)
+				| other => throw Exception(
+						"Unknown constant {0} found in Expr.FromBinary()" <- other
+					)
+			}
+		}
+		
+		public static Mem8(addr : Expr, PC : uint) : Expr {
+			Memory(8, addr, PC)
+		}
+		
+		public static Mem16(addr : Expr, PC : uint) : Expr {
+			Memory(16, addr, PC)
+		}
+		
+		public static Mem32(addr : Expr, PC : uint) : Expr {
+			Memory(32, addr, PC)
+		}
+		
+		public static MemSingle(addr : Expr, PC : uint) : Expr {
+			FPMemory(32, addr, PC)
+		}
+		
+		public static MemDouble(addr : Expr, PC : uint) : Expr {
+			FPMemory(64, addr, PC)
+		}
+		
+		public static @^+(left : object, right : object) : Expr {
+			Call(CPU.Add(ToExpr(left), ToExpr(right)))
+		}
+		public static @^-(left : object, right : object) : Expr {
+			Call(CPU.Sub(ToExpr(left), ToExpr(right)))
+		}
+		
+		public static @+ (left : object, right : object) : Expr { Arith(EArith.Add(), ToExpr(left), ToExpr(right)) }
+		public static @- (left : object, right : object) : Expr { Arith(EArith.Sub(), ToExpr(left), ToExpr(right)) }
+		public static @* (left : object, right : object) : Expr { Arith(EArith.Mul(), ToExpr(left), ToExpr(right)) }
+		public static @/ (left : object, right : object) : Expr { Arith(EArith.Div(), ToExpr(left), ToExpr(right)) }
+		public static @% (left : object, right : object) : Expr { Arith(EArith.Mod(), ToExpr(left), ToExpr(right)) }
+		public static @^ (left : object, right : object) : Expr { Arith(EArith.Xor(), ToExpr(left), ToExpr(right)) }
+		public static @| (left : object, right : object) : Expr { Arith(EArith.Or (), ToExpr(left), ToExpr(right)) }
+		public static @& (left : object, right : object) : Expr { Arith(EArith.And(), ToExpr(left), ToExpr(right)) }
+		public static @<<(left : object, right : object) : Expr { Arith(EArith.Shl(), ToExpr(left), ToExpr(right)) }
+		public static @>>(left : object, right : object) : Expr { Arith(EArith.Shr(), ToExpr(left), ToExpr(right)) }
+		public static @~ (left : Expr) : Expr { Arith(EArith.Not(), left, null) }
+		public static @- (left : Expr) : Expr { Arith(EArith.Sub(), left, null) }
+		
+		public static @==(left : object, right : object) : Expr { Compare(EComp.EQ(), ToExpr(left), ToExpr(right)) }
+		public static @!=(left : object, right : object) : Expr { Compare(EComp.NE(), ToExpr(left), ToExpr(right)) }
+		public static @< (left : object, right : object) : Expr { Compare(EComp.LT(), ToExpr(left), ToExpr(right)) }
+		public static @> (left : object, right : object) : Expr { Compare(EComp.GT(), ToExpr(left), ToExpr(right)) }
+		public static @<=(left : object, right : object) : Expr { Compare(EComp.LE(), ToExpr(left), ToExpr(right)) }
+		public static @>=(left : object, right : object) : Expr { Compare(EComp.GE(), ToExpr(left), ToExpr(right)) }
+		
+		public static @&&&(left : Expr, right : Expr) : Expr { LAnd(left, right) }
+		public static @|||(left : Expr, right : Expr) : Expr { LOr(left, right) }
+	}
+}

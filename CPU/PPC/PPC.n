@@ -1,0 +1,748 @@
+using System;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.Expr;
+using IronBabel.Macros;
+using IronBabel.Macros.PPC;
+
+namespace IronBabel.CPU.PPC {
+	public variant PPCOpcode {
+		| Opcode {
+			Opcd : uint;
+			Mnem : string;
+			Handler : uint -> void;
+		}
+		| XOpcode {
+			XOpcd : uint * uint;
+			XMnem : string;
+			XHandler : uint -> void;
+		}
+	}
+	
+	public partial class PPC : BaseCPU {
+		protected Opcodes : Hashtable [uint, PPCOpcode.Opcode] = Hashtable();
+		protected XOpcodes : Hashtable [uint * uint, PPCOpcode.XOpcode] = Hashtable();
+		protected XOMasks : Hashtable [uint, uint * bool] = Hashtable();
+		
+		protected mutable CR : array [Expr];
+		
+		register R0  : uint; register R1  : uint;
+		register R2  : uint; register R3  : uint;
+		register R4  : uint; register R5  : uint;
+		register R6  : uint; register R7  : uint;
+		register R8  : uint; register R9  : uint;
+		register R10 : uint; register R11 : uint;
+		register R12 : uint; register R13 : uint;
+		register R14 : uint; register R15 : uint;
+		
+		register R16 : uint; register R17 : uint;
+		register R18 : uint; register R19 : uint;
+		register R20 : uint; register R21 : uint;
+		register R22 : uint; register R23 : uint;
+		register R24 : uint; register R25 : uint;
+		register R26 : uint; register R27 : uint;
+		register R28 : uint; register R29 : uint;
+		register R30 : uint; register R31 : uint;
+		
+		register CR0 : uint; register CR1 : uint;
+		register CR2 : uint; register CR3 : uint;
+		register CR4 : uint; register CR5 : uint;
+		register CR6 : uint; register CR7 : uint;
+		
+		register LR    : uint;
+		register CTR   : uint;
+		register MSR   : uint;
+		register FPSCR : uint;
+		register TBL   : uint;
+		register TBU   : uint;
+		register XER   : uint;
+		register SRR0  : uint;
+		register SRR1  : uint;
+		register DEC   : uint;
+		
+		register IBAT0U : uint; register IBAT0L : uint;
+		register IBAT1U : uint; register IBAT1L : uint;
+		register IBAT2U : uint; register IBAT2L : uint;
+		register IBAT3U : uint; register IBAT3L : uint;
+		
+		register IBAT4U : uint; register IBAT4L : uint;
+		register IBAT5U : uint; register IBAT5L : uint;
+		register IBAT6U : uint; register IBAT6L : uint;
+		register IBAT7U : uint; register IBAT7L : uint;
+		
+		register DBAT0U : uint; register DBAT0L : uint;
+		register DBAT1U : uint; register DBAT1L : uint;
+		register DBAT2U : uint; register DBAT2L : uint;
+		register DBAT3U : uint; register DBAT3L : uint;
+		
+		register DBAT4U : uint; register DBAT4L : uint;
+		register DBAT5U : uint; register DBAT5L : uint;
+		register DBAT6U : uint; register DBAT6L : uint;
+		register DBAT7U : uint; register DBAT7L : uint;
+		
+		register SPRG0  : uint; register SPRG1  : uint;
+		register SPRG2  : uint; register SPRG3  : uint;
+		
+		register DAR    : uint;
+		register DSISR  : uint;
+		
+		public this() {
+			base();
+			CPUType = "PPC";
+			_ = CompilerParams.ReferencedAssemblies.Add(ObjPath + "IronBabel.CPU.PPC.dll");
+			Using = "IronBabel.CPU.PPC" :: Using;
+			
+			CR = array [
+				CR0, CR1, CR2, CR3,
+				CR4, CR5, CR6, CR7
+			];
+			
+			XOMasks[19U] = (0x3FFU, false);
+			XOMasks[31U] = (0x3FFU, false);
+			XOMasks[59U] = (0x01FU, false);
+			XOMasks[63U] = (0x3FFU, true );
+			DefineOpcodes()
+		}
+		
+		protected mutable ExtInt : bool = false;
+		public RaiseExt(addr : uint) : void {
+			print "Raising ext, MSR&0x8000==0x{0:X4}" <- (_MSR & 0x8000U);
+			if(((_MSR >> 15) & 1U) == 1U) {
+				_SRR0 = addr;
+				_SRR1 = (_SRR1 & ~0b1111110000011110U) | (_MSR & 0b1100111011111111000000000000000U) | 2U;
+				PC = ({
+					if(((_MSR >> 6) & 1U) == 1U)
+						0xFFF00000U
+					else
+						0U
+				}) | 0x00500U;
+				_MSR &= ~(1U << 15);
+				throw Interrupt()
+			} else
+				ExtInt = true
+		}
+		
+		public SetMSR(addr : uint, MSR : uint) : void {
+			print "Setting MSR with external exceptions {0}" <- (if((MSR & 0x8000U) == 0x8000U) "enabled" else "disabled");
+			_MSR = MSR;
+			
+			when(ExtInt && ((_MSR >> 15) & 1U) == 1U) {
+				ExtInt = false;
+				RaiseExt(addr)
+			}
+		}
+		
+		protected override Translate() : void {
+			def inst = MMU.Mem32[PC, PC];
+			def opcd = inst >> 26;
+			def opcd = {
+				if(Opcodes.ContainsKey(opcd))
+					Opcodes[opcd]
+				else {
+					def xo = {
+						if(XOMasks.ContainsKey(opcd))
+							(inst >> 1) & XOMasks[opcd][0]
+						else
+							throw Exception(
+								"Unknown opcode {0}" <- opcd
+							)
+					};
+					def xo = {
+						if(XOMasks[opcd][1] && (xo & 0x10U) != 0U)
+							xo & 0x1FU
+						else
+							xo
+					};
+					if(XOpcodes.ContainsKey((opcd, xo)))
+						XOpcodes[(opcd, xo)]
+					else
+						throw Exception(
+							"Unknown extended opcode {0} {1}" <- (
+								opcd,
+								xo
+							)
+						)
+				}
+			};
+			
+			match(opcd) {
+				| Opcode(_, _, handler)
+				| XOpcode(_, _, handler) =>
+					PC += 4U;
+					handler(inst)
+			}
+		}
+		
+		public override Debug(_PC : uint) : void {
+			print "\tPC : {0:X8}" <- _PC;
+			print;
+			print "\tR0 : {0:X8}    R1 : {1:X8}" <- (_R0 , _R1 );
+			print "\tR2 : {0:X8}    R3 : {1:X8}" <- (_R2 , _R3 );
+			print "\tR4 : {0:X8}    R5 : {1:X8}" <- (_R4 , _R5 );
+			print "\tR6 : {0:X8}    R7 : {1:X8}" <- (_R6 , _R7 );
+			print "\tR8 : {0:X8}    R9 : {1:X8}" <- (_R8 , _R9 );
+			print "\tR10: {0:X8}    R11: {1:X8}" <- (_R10, _R11);
+			print "\tR12: {0:X8}    R13: {1:X8}" <- (_R12, _R13);
+			print "\tR14: {0:X8}    R15: {1:X8}" <- (_R14, _R15);
+			print;
+			print "\tR16: {0:X8}    R17: {1:X8}" <- (_R16, _R17);
+			print "\tR18: {0:X8}    R19: {1:X8}" <- (_R18, _R19);
+			print "\tR20: {0:X8}    R21: {1:X8}" <- (_R20, _R21);
+			print "\tR22: {0:X8}    R23: {1:X8}" <- (_R22, _R23);
+			print "\tR24: {0:X8}    R25: {1:X8}" <- (_R24, _R25);
+			print "\tR26: {0:X8}    R27: {1:X8}" <- (_R26, _R27);
+			print "\tR28: {0:X8}    R29: {1:X8}" <- (_R28, _R29);
+			print "\tR30: {0:X8}    R31: {1:X8}" <- (_R30, _R31);
+			print
+		}
+		
+		protected Opcode(opcd : uint, mnem : string, handler : uint -> void) : void {
+			Opcodes[opcd] = PPCOpcode.Opcode(
+				opcd,
+				mnem,
+				handler
+			)
+		}
+		
+		protected XOpcode(opcd : uint * uint, mnem : string, handler : uint -> void) : void {
+			XOpcodes[opcd] = PPCOpcode.XOpcode(
+				opcd,
+				mnem,
+				handler
+			)
+		}
+		
+		protected Reg(reg : uint) : Expr {
+			Var(
+				"CPU._R{0}" <- reg,
+				32
+			)
+		}
+		
+		protected RegOrZero(reg : uint) : Expr {
+			if(reg == 0U)
+				Num(0U)
+			else
+				Reg(reg)
+		}
+		
+		protected AForm(
+			inst : uint,
+			_ : string, _ : string, _ : string, 
+			_ : string, _ : string
+		) : uint * uint * uint * uint * bool {
+			(
+				(inst >> 21) & 0x0000001FU,
+				(inst >> 16) & 0x0000001FU,
+				(inst >> 11) & 0x0000001FU,
+				(inst >>  6) & 0x0000001FU,
+				(inst        & 0x00000001U) == 1U
+			)
+		}
+		
+		protected DForm(
+			inst : uint, sType : string, aType : string, dType : string
+		) : Expr * Expr * Expr {
+			def s = (inst >> 21) & 0x0000001FU;
+			def a = (inst >> 16) & 0x0000001FU;
+			def d =  inst        & 0x0000FFFFU;
+			(
+				match(sType) {
+					| "" | "Expr" | "Reg" =>
+						Reg(s)
+					| "Num" =>
+						Num(s)
+					| _ =>
+						throw Exception(
+							"Unknown sType {0}" <- sType
+						)
+				},
+				match(aType) {
+					| "" | "Reg" =>
+						Reg(a)
+					| "Expr" =>
+						RegOrZero(a)
+					| "Num" =>
+						Num(a)
+					| _ =>
+						throw Exception(
+							"Unknown sType {0}" <- sType
+						)
+				},
+				match(dType) {
+					| "" | "Expr" | "Num" =>
+						Num(d)
+					| "SNum" =>
+						Sign(d, 16)
+					| _ =>
+						throw Exception(
+							"Unknown sType {0}" <- sType
+						)
+				}
+			)
+		}
+		
+		protected XForm(
+			inst : uint,
+			_ : string, _ : string, 
+			_ : string, _ : string
+		) : uint * uint * uint * bool {
+			(
+				(inst >> 21) & 0x0000001FU,
+				(inst >> 16) & 0x0000001FU,
+				(inst >> 11) & 0x0000001FU,
+				(inst        & 0x00000001U) == 1U
+			)
+		}
+		
+		protected IForm(
+			inst : uint,
+			_ : string, _ : string, _ : string
+		) : Expr * bool * bool {
+			(
+				Sign((inst >> 2) & 0x00FFFFFFU, 24) << 2,
+				((inst >> 1) & 0x00000001U) == 1U,
+				( inst       & 0x00000001U) == 1U
+			)
+		}
+		
+		protected MForm(
+			inst : uint,
+			_ : string, _ : string, _ : string, 
+			_ : string, _ : string, _ : string
+		) : Expr * Expr * uint * uint * uint * bool {
+			(
+				Reg((inst >> 21) & 0x0000001FU),
+				Reg((inst >> 16) & 0x0000001FU),
+					(inst >> 11) & 0x0000001FU ,
+					(inst >>  6) & 0x0000001FU ,
+					(inst >>  1) & 0x0000001FU ,
+					 inst        & 0x00000001U == 1U
+			)
+		}
+		
+		protected Compare(a : Expr, b : Expr, signed : bool = false) : Expr {
+			def (a, b) = {
+				if(signed)
+					(Signed(a), Signed(b))
+				else
+					(a, b)
+			};
+			
+			Ternary(
+				a < b, 
+				Num(4),
+				Ternary(
+					a > b,
+					Num(2),
+					Num(1)
+				)
+			)
+		}
+		
+		protected CondBranch(
+			bo : Expr, bi : Expr,
+			taken : void -> void,
+			not : void -> void
+		) : void {
+			CondBranch(
+				bo.AsNum(), bi.AsNum(),
+				taken, not
+			)
+		}
+		protected CondBranch(
+			bo : uint, bi : uint,
+			taken : void -> void,
+			not : void -> void
+		) : void {
+			def bi = CR[(bi >> 2) :> int] & (Num(1U) << (Num(2) - (bi & 3)));
+			def bo = bo & 0x1EU;
+			
+			unless(bo & 4U == 4U)
+				CTR := CTR - 1;
+			
+			def cond = match(bo) {
+				| 0x04U => bi == 0
+				| 0x0CU => bi != 0
+				| 0x14U => null
+				
+				| 0x00U => (CTR != 0) &&& (bi == 0)
+				| 0x02U => (CTR == 0) &&& (bi == 0)
+				| 0x08U => (CTR != 0) &&& (bi != 0)
+				| 0x0AU => (CTR == 0) &&& (bi != 0)
+				
+				| 0x10U => CTR != 0
+				| 0x12U => CTR == 0
+				
+				| _ => throw Exception(
+						"Unknown bo {0:X}" <- bo
+					)
+			};
+			
+			Emit(
+				if(cond : object == null)
+					Eval(taken)
+				else
+					If(
+						cond,
+						Eval(taken),
+						Eval(not)
+					)
+			)
+		}
+		
+		protected Record(rc : bool, reg : uint) : void {
+			when(rc)
+				CR[0] := Compare(Reg(reg), SNum(0), signed=true)
+		}
+		protected Record(rc : bool, reg : Expr) : void {
+			when(rc)
+				CR[0] := Compare(reg, SNum(0), signed=true)
+		}
+		protected Record(reg : Expr) : void {
+			CR[0] := Compare(reg, SNum(0), signed=true)
+		}
+		
+		protected virtual SPR(a : uint, b : uint) : Expr {
+			match((b << 5) | a) {
+				| 1 => XER
+				| 8 => LR
+				| 9 => CTR
+				| 18 => DSISR
+				| 19 => DAR
+				| 22 => DEC
+				| 26 => SRR0
+				| 27 => SRR1
+				
+				| 272 => SPRG0
+				| 273 => SPRG1
+				| 274 => SPRG2
+				| 275 => SPRG3
+				
+				| 528 => IBAT0U
+				| 529 => IBAT0L
+				| 530 => IBAT1U
+				| 531 => IBAT1L
+				| 532 => IBAT2U
+				| 533 => IBAT2L
+				| 534 => IBAT3U
+				| 535 => IBAT3L
+				
+				| 560 => IBAT4U
+				| 561 => IBAT4L
+				| 562 => IBAT5U
+				| 563 => IBAT5L
+				| 564 => IBAT6U
+				| 565 => IBAT6L
+				| 566 => IBAT7U
+				| 567 => IBAT7L
+				
+				| 536 => DBAT0U
+				| 537 => DBAT0L
+				| 538 => DBAT1U
+				| 539 => DBAT1L
+				| 540 => DBAT2U
+				| 541 => DBAT2L
+				| 542 => DBAT3U
+				| 543 => DBAT3L
+				
+				| 568 => DBAT4U
+				| 569 => DBAT4L
+				| 570 => DBAT5U
+				| 571 => DBAT5L
+				| 572 => DBAT6U
+				| 573 => DBAT6L
+				| 574 => DBAT7U
+				| 575 => DBAT7L
+				
+				| spr => throw Exception(
+					"Unknown SPR {0} {0:X}" <- spr
+				)
+			}
+		}
+		
+		protected virtual DefineOpcodes() : void {
+			DefineArithOpcodes();
+			
+			opcode cmpli(10, DForm(d : Num, a, uimm)) {
+				CR[(d.AsNum() >> 2) :> int] := Compare(a, uimm)
+			}
+			
+			opcode cmpi(11, DForm(d : Num, a, simm : SNum)) {
+				CR[(d.AsNum() >> 2) :> int] := Compare(a, simm, signed=true)
+			}
+			
+			opcode bcx(16, DForm(bo : Num, bi : Num, uimm)) {
+				def uimm = uimm.AsNum();
+				def bd = Sign(uimm & 0xFFFCU, 16);
+				def aa = (uimm >> 1) == 1U;
+				def lk = (uimm & 1U) == 1U;
+				
+				CondBranch(
+					bo,
+					bi,
+					fun() {
+						when(lk)
+							LR := PC;
+						
+						Branch(
+							if(aa)
+								bd
+							else
+								bd + PC - 4U
+						)
+					},
+					fun() {
+						Branch(PC)
+					}
+				)
+			}
+			
+			opcode sc(17, stub);
+			
+			opcode bx(18, IForm(li, aa, lk)) {
+				when(lk)
+					LR := PC;
+				
+				Branch(
+					if(aa)
+						li
+					else
+						li + PC - 4U
+				)
+			}
+			
+			opcode lwz(32, DForm(d, a : Expr, simm : SNum)) {
+				d := Mem32(a + simm)
+			}
+			
+			opcode lwzu(33, DForm(d, a, simm : SNum)) {
+				d := Mem32(a + simm);
+				a := a + simm
+			}
+			
+			opcode lbz(34, DForm(d, a : Expr, simm : SNum)) {
+				d := Mem8(a + simm)
+			}
+			
+			opcode lbzu(35, DForm(d, a, simm : SNum)) {
+				d := Mem8(a + simm);
+				a := a + simm
+			}
+			
+			opcode stw(36, DForm(s, a : Expr, d : SNum)) {
+				Mem32(a + d) := s
+			}
+			
+			opcode stwu(37, DForm(s, a, d : SNum)) {
+				Mem32(a + d) := s;
+				a := a + d
+			}
+			
+			opcode stb(38, DForm(s, a : Expr, d : SNum)) {
+				Mem8(a + d) := s
+			}
+			
+			opcode stbu(39, DForm(s, a, d : SNum)) {
+				Mem8(a + d) := s;
+				a := a + d
+			}
+			
+			opcode lhz(40, DForm(d, a : Expr, simm : SNum)) {
+				d := Mem16(a + simm)
+			}
+			
+			opcode sth(44, DForm(s, a : Expr, d : SNum)) {
+				Mem16(a + d) := s
+			}
+			
+			opcode lmw(46, DForm(d : Num, a : Expr, simm : SNum)) {
+				def d = d.AsNum();
+				for(mutable rD = d; rD < 32U; ++rD)
+					Reg(rD) := Mem32(a + simm + ((rD - d) * 4U))
+			}
+			
+			opcode stmw(47, DForm(s : Num, a : Expr, d : SNum)) {
+				def s = s.AsNum();
+				for(mutable rS = s; rS < 32U; ++rS)
+					Mem32(a + d + ((rS - s) * 4U)) := Reg(rS)
+			}
+			
+			opcode blr(19, 16, XForm(bo, bi, _, lk)) {
+				CondBranch(
+					bo,
+					bi,
+					fun() {
+						when(lk)
+							LR := PC;
+						
+						Branch(LR & 0xFFFFFFFCU)
+					},
+					fun() {
+						Branch(PC)
+					}
+				)
+			}
+			
+			opcode mfcr(31, 19, XForm(d, _, _, _)) {
+				Reg(d) := (
+					(CR[0] << 28) | 
+					(CR[1] << 24) | 
+					(CR[2] << 20) | 
+					(CR[3] << 16) | 
+					(CR[4] << 12) | 
+					(CR[5] <<  8) | 
+					(CR[6] <<  4) | 
+					 CR[7]
+				)
+			}
+			
+			opcode rfi(19, 50, XForm(_, _, _, _)) {
+				def mask = 0x87C0FF73U;
+				MSR := (MSR & ~(mask | 0x00040000U)) | (SRR1 & mask);
+				MSR := MSR | (1U << 15);
+				Branch(SRR0 & 0xFFFFFFFCU)
+			}
+			
+			opcode isync(19, 150, stub);
+			
+			opcode bcctrx(19, 528, XForm(bo, bi, _, lk)) {
+				CondBranch(
+					bo,
+					bi,
+					fun() {
+						when(lk)
+							LR := PC;
+						
+						Branch(CTR & 0xFFFFFFFCU)
+					},
+					fun() {
+						Branch(PC)
+					}
+				)
+			}
+			
+			opcode cmp(31, 0, XForm(d, a, b, _)) {
+				CR[(d >> 2) :> int] := Compare(Reg(a), Reg(b), signed=true)
+			}
+			
+			opcode lwzx(31, 23, XForm(d, a, b, _)) {
+				Reg(d) := Mem32(RegOrZero(a) + Reg(b))
+			}
+			
+			opcode cmpl(31, 32, XForm(d, a, b, _)) {
+				CR[(d >> 2) :> int] := Compare(Reg(a), Reg(b))
+			}
+			
+			opcode dcbst(31, 54, stub);
+			
+			opcode lwzux(31, 55, XForm(d, a, b, _)) {
+				def sum = Reg(a) + Reg(b);
+				def sum = {
+					if(d == b) {
+						Var("uint temp", 32) := sum;
+						Var("temp", 32)
+					} else
+						sum
+				};
+				Reg(d) := Mem32(sum);
+				Reg(a) := sum
+			}
+			
+			opcode mfmsr(31, 83, XForm(d, _, _, _)) {
+				Reg(d) := MSR
+			}
+			
+			opcode dcbf(31, 86, stub);
+			
+			opcode lbzx(31, 87, XForm(d, a, b, _)) {
+				Reg(d) := Mem8(RegOrZero(a) + Reg(b))
+			}
+			
+			opcode mtcrf(31, 144, XForm(_, _, _, _)) {
+				def CRM = (inst >> 12) & 0xFFU;
+				def S = Reg((inst >> 20) & 0x1FU);
+				
+				when((CRM & 0b00000001U) != 0U) CR[7] := (S >>  0) & 0xF;
+				when((CRM & 0b00000010U) != 0U) CR[6] := (S >>  4) & 0xF;
+				when((CRM & 0b00000100U) != 0U) CR[5] := (S >>  8) & 0xF;
+				when((CRM & 0b00001000U) != 0U) CR[4] := (S >> 12) & 0xF;
+
+				when((CRM & 0b00010000U) != 0U) CR[3] := (S >> 16) & 0xF;
+				when((CRM & 0b00100000U) != 0U) CR[2] := (S >> 20) & 0xF;
+				when((CRM & 0b01000000U) != 0U) CR[1] := (S >> 24) & 0xF;
+				when((CRM & 0b10000000U) != 0U) CR[0] := (S >> 28) & 0xF;
+			}
+			
+			opcode mtmsr(31, 146, XForm(s, _, _, _)) {
+				Emit(Call(CPU.SetMSR(PC, Reg(s))))
+			}
+			
+			opcode stwx(31, 151, XForm(s, a, b, _)) {
+				Mem32(RegOrZero(a) + Reg(b)) := Reg(s)
+			}
+			
+			opcode stwux(31, 183, XForm(s, a, b, _)) {
+				def sum = Reg(a) + Reg(b);
+				Mem32(sum) := Reg(s);
+				Reg(a) := sum
+			}
+			
+			opcode stbx(31, 215, XForm(s, a, b, _)) {
+				Mem8(RegOrZero(a) + Reg(b)) := Reg(s)
+			}
+			
+			opcode stbux(31, 247, XForm(s, a, b, _)) {
+				def sum = Reg(a) + Reg(b);
+				Mem8(sum) := Reg(s);
+				Reg(a) := sum
+			}
+			
+			opcode lhzx(31, 279, XForm(d, a, b, _)) {
+				Reg(d) := Mem16(RegOrZero(a) + Reg(b))
+			}
+			
+			opcode mfspr(31, 339, XForm(d, a, b, _)) {
+				Reg(d) := SPR(a, b)
+			}
+			
+			opcode mftb(31, 371, XForm(d, a, b, _)) {
+				def ticks = Var("Environment.TickCount", 32) :>> uint;
+				match((b << 5) + a) {
+					| 268U =>
+						Reg(d) := TBL + (ticks << 6)
+					| 269U =>
+						Reg(d) := TBU + (ticks >> 26)
+					| tbr =>
+						throw Exception(
+							"Unknown timebase register {0}" <- tbr
+						)
+				}
+			}
+			
+			opcode sthx(31, 407, XForm(s, a, b, _)) {
+				Mem16(RegOrZero(a) + Reg(b)) := Reg(s)
+			}
+			
+			opcode mtspr(31, 467, XForm(s, a, b, _)) {
+				SPR(a, b) := Reg(s)
+			}
+			
+			opcode dcbi(31, 470, stub);
+			
+			opcode sync(31, 598, stub);
+			
+			opcode icbi(31, 982, stub);
+			
+			opcode dcbz(31, 1014, stub);
+			
+			opcode mtfsb1x(63, 38, XForm(d, _, _, _)) {
+				FPSCR := FPSCR | (0x80000000U >> d)
+			}
+		}
+	}
+}

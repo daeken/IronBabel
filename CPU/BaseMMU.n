@@ -1,0 +1,531 @@
+using System;
+using System.IO;
+using System.Threading;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Misc;
+
+namespace IronBabel.CPU {
+	public variant Mapping {
+		| Physical {
+			PhysBase : uint;
+			PhysSize : uint;
+			PhysBuffer : array [Byte];
+			PhysBufferOff : int;
+		}
+		| HWReg {
+			HWBase : uint;
+			HWSize : uint;
+			HWGetter : BaseCPU * uint * int * uint -> object;
+			HWSetter : BaseCPU * uint * object * int * uint -> void;
+		}
+		
+		public Addr [addr : int] : uint {
+			get {
+				match(this) {
+					| Physical(baseaddr, _, _, _)
+					| HWReg(baseaddr, _, _, _) =>
+						baseaddr + (addr :> uint)
+				}
+			}
+		}
+		
+		public Off [addr : uint] : int {
+			get {
+				match(this) {
+					| Physical(baseaddr, _, _, _)
+					| HWReg(baseaddr, _, _, _) =>
+						(addr - baseaddr) :> int
+				}
+			}
+		}
+	}
+	
+	public enum PageFlags {
+		| None
+		| Read
+		| Write
+		| Execute
+		| All = Read %| Write %| Execute
+	}
+	
+	public class BaseMMU {
+		[ThreadStatic] public mutable static CPU : BaseCPU;
+		mutable PhysMappings : list [Mapping] = [];
+		PhysLock : Mutex;
+		PageSize : uint;
+		PageShift : int;
+		PageMask : uint;
+		PageTable : array [bool * PageFlags * int * Mapping];
+		DoSwap : bool;
+		CRCTable : array [UInt32] = array(256);
+		
+		public PageValid [addr : uint] : bool {
+			get { PageTable[(addr >> PageShift) :> int][0] }
+			set {
+				def off = (addr >> PageShift) :> int;
+				def (_, flags, addr, mapping) = PageTable[off];
+				PageTable[off] = (value, flags, addr, mapping)
+			}
+		}
+		
+		public Pages [addr : uint] : bool * PageFlags * uint {
+			get {
+				def off = (addr >> PageShift) :> int;
+				def (valid, flags, addr, mapping) = PageTable[off];
+				(valid, flags, mapping.Addr[addr])
+			}
+			set {
+				def off = (addr >> PageShift) :> int;
+				def (valid, flags, physaddr) = value;
+				def mapping = FindPhysMapping(physaddr, 0U);
+				PageTable[off] = (valid, flags, mapping.Off[physaddr], mapping)
+			}
+		}
+		
+		public this(LittleEndian : bool, PageSize : uint) {
+			def log(num, accum=0) {
+				match(num) {
+					| 1U => accum
+					| _ => log(num>>1, accum + 1)
+				}
+			}
+			
+			DoSwap = (
+				(BitConverter.IsLittleEndian && !LittleEndian) ||
+				(!BitConverter.IsLittleEndian && LittleEndian)
+			);
+			this.PageSize = PageSize;
+			PageShift = log(PageSize);
+			PageMask = unchecked(0xFFFFFFFFU >> (32 - PageShift));
+			
+			PageTable = array(((1L << 32) / PageSize) :> int);
+			for(mutable i = 0; i < PageTable.Length; ++i)
+				PageTable[i] = (false, PageFlags.None, 0, null);
+			
+			PhysLock = Mutex();
+			
+			for(mutable i : int = 0; i < 256; ++i) {
+				mutable entry = i :> uint;
+				for(mutable j = 0; j < 8; ++j) {
+					if((entry & 1) == 1)
+						entry = (entry >> 1) ^ 0xEDB88320U
+					else
+						entry >>= 1
+				}
+				CRCTable[i] = entry
+			}
+		}
+		
+		protected CondSwap(val : ushort) : ushort {
+			if(DoSwap)
+				Swap(val)
+			else
+				val
+		}
+		protected CondSwap(val : uint) : uint {
+			if(DoSwap)
+				Swap(val)
+			else
+				val
+		}
+		protected CondSwap(val : ulong) : ulong {
+			if(DoSwap)
+				Swap(val)
+			else
+				val
+		}
+		
+		public Crc32(addr : uint, size : uint) : uint {
+			def size = size :> int;
+			mutable crc = 0xFFFFFFFFU;
+			
+			for(mutable i = 0; i < size; ++i)
+				crc = (crc >> 8) ^ CRCTable[Mem8[addr + (i :> uint), 0U] :> int];
+			
+			crc
+		}
+		
+		public AddPhysicalMapping(mapping : Mapping) : void {
+			PhysMappings = mapping :: PhysMappings;
+		}
+		
+		FindMapping(addr : uint, PC : uint, mappings : list[Mapping]) : Mapping {
+			match(mappings) {
+				| [] => throw BusError(addr, PC)
+				| head :: tail =>
+					match(head) {
+						| Physical(mapaddr, mapsize, _, _)
+						| HWReg(mapaddr, mapsize, _, _) =>
+							if(mapaddr <= addr && mapaddr + mapsize > addr)
+								head
+							else
+								FindMapping(addr, PC, tail)
+						| _ => null
+					}
+			}
+		}
+		
+		FindPhysMapping(addr : uint, PC : uint) : Mapping {
+			FindMapping(addr, PC, PhysMappings)
+		}
+		
+		GetPage(addr : uint, PC : uint) : PageFlags * int * Mapping {
+			def off = (addr >> PageShift) :> int;
+			def (valid, flags, off, mapping) = PageTable[off];
+			if(valid)
+				(flags, off + (addr & PageMask) :> int, mapping)
+			else {
+				print "Invalid at {0:X8}" <- addr;
+				throw Exception(
+					"Invalid pagetable entry at {0:X8} from {1:X8}" <- (addr, PC)
+				)
+			}
+		}
+		
+		public AddPages(mutable addr : uint, mutable physaddr : uint, size : uint, flags : PageFlags) : void {
+			def size = 
+				size + 
+				if((addr & PageMask) == 0U && (physaddr & PageMask) == 0U) 0U
+				else PageSize;
+			def top = addr + size;
+			while(addr < top) {
+				Pages[addr] = (true, flags, physaddr);
+				addr += PageSize;
+				physaddr += PageSize
+			}
+		}
+		
+		public GetPhysBytes(addr : uint, size : uint, PC : uint) : array [byte] * int {
+			if((addr + size) & ~PageMask == 0U) {
+				def (_, off, mapping) = GetPage(addr, PC);
+				def (_, _, buffer, boff) = mapping :> Mapping.Physical;
+				(buffer, boff + off)
+			} else {
+				def buffer = array(size :> int);
+				for(mutable i = 0U; i < size; ++i) {
+					def (_, off, mapping) = GetPage(addr + i, PC);
+					def (_, _, pbuf, boff) = mapping :> Mapping.Physical;
+					buffer[i :> int] = pbuf[boff+off]
+				}
+				(buffer, 0)
+			}
+		}
+		
+		public SetPhysBytes(addr : uint, bytes : array [byte], PC : uint) : void {
+			if((addr + (bytes.Length :> uint)) & ~PageMask == 0U) {
+				def (_, off, mapping) = GetPage(addr, PC);
+				def (_, _, buffer, boff) = mapping :> Mapping.Physical;
+				Array.Copy(
+					bytes,
+					0,
+					buffer,
+					boff+off,
+					bytes.Length
+				)
+			} else {
+				for(mutable i = 0; i < bytes.Length; ++i) {
+					def (_, off, mapping) = GetPage(addr + (i :> uint), PC);
+					def (_, _, pbuf, boff) = mapping :> Mapping.Physical;
+					pbuf[boff+off] = bytes[i]
+				}
+			}
+		}
+		
+		public EnterLock(_off : int, _mapping : Mapping) : void {
+			_ = PhysLock.WaitOne() // [(mapping.Addr[off] >> PageShift) :> int]
+		}
+		
+		public LeaveLock(_off : int, _mapping : Mapping) : void {
+			PhysLock.ReleaseMutex() // [(mapping.Addr[off] >> PageShift) :> int]
+		}
+		
+		public GetUInt8(addr : uint, PC : uint) : byte {
+			def (_, off, mapping) = GetPage(addr, PC);
+			EnterLock(off, mapping);
+			
+			def value = 
+				match(mapping) {
+					| HWReg(_, _, getter, _) =>
+						getter(CPU, mapping.Addr[off], 1, PC) :> byte
+					| Physical(_, _, buffer, boff) =>
+						buffer[boff + off]
+				}
+			
+			LeaveLock(off, mapping);
+			value
+		}
+		
+		public GetUInt16(addr : uint, PC : uint) : ushort {
+			def (_, off, mapping) = GetPage(addr, PC);
+			EnterLock(off, mapping);
+			
+			def value = 
+				match(mapping) {
+					| HWReg(_, _, getter, _) =>
+						getter(CPU, mapping.Addr[off], 2, PC) :> ushort
+					| Physical(_, _, _, _) =>
+						CondSwap(
+							BitConverter.ToUInt16(
+								GetPhysBytes(addr, 2U, PC)
+							)
+						)
+				}
+			
+			LeaveLock(off, mapping);
+			value
+		}
+		
+		public GetUInt32(addr : uint, PC : uint) : uint {
+			def (_, off, mapping) = GetPage(addr, PC);
+			EnterLock(off, mapping);
+			
+			def value = 
+				match(mapping) {
+					| HWReg(_, _, getter, _) =>
+						getter(CPU, mapping.Addr[off], 4, PC) :> uint
+					| Physical(_, _, _, _) =>
+						CondSwap(
+							BitConverter.ToUInt32(
+								GetPhysBytes(addr, 4U, PC)
+							)
+						)
+				}
+			
+			LeaveLock(off, mapping);
+			value
+		}
+		
+		public GetUInt64(addr : uint, PC : uint) : ulong {
+			def (_, off, mapping) = GetPage(addr, PC);
+			EnterLock(off, mapping);
+			
+			def value = 
+				match(mapping) {
+					| HWReg(_, _, getter, _) =>
+						getter(CPU, mapping.Addr[off], 8, PC) :> ulong
+					| Physical(_, _, _, _) =>
+						CondSwap(
+							BitConverter.ToUInt64(
+								GetPhysBytes(addr, 8U, PC)
+							)
+						)
+				}
+			
+			LeaveLock(off, mapping);
+			value
+		}
+		
+		public GetSingle(addr : uint, PC : uint) : Single {
+			BitConverter.ToSingle(
+				BitConverter.GetBytes(
+					GetUInt32(addr, PC)
+				),
+				0
+			)
+		}
+		
+		public GetDouble(addr : uint, PC : uint) : Double {
+			BitConverter.ToDouble(
+				BitConverter.GetBytes(
+					GetUInt64(addr, PC)
+				),
+				0
+			)
+		}
+		
+		public SetUInt8(addr : uint, value : byte, PC : uint) : void {
+			def (_, off, mapping) = GetPage(addr, PC);
+			EnterLock(off, mapping);
+			
+			match(mapping) {
+				| HWReg(_, _, _, setter) =>
+					setter(CPU, mapping.Addr[off], value, 1, PC)
+				| Physical(_, _, buffer, boff) =>
+					buffer[boff + off] = value
+			}
+			
+			LeaveLock(off, mapping)
+		}
+		
+		public SetUInt16(addr : uint, value : ushort, PC : uint) : void {
+			def (_, off, mapping) = GetPage(addr, PC);
+			EnterLock(off, mapping);
+			
+			match(mapping) {
+				| HWReg(_, _, _, setter) =>
+					setter(CPU, mapping.Addr[off], value, 2, PC)
+				| Physical(_, _, _, _) =>
+					def value = CondSwap(value);
+					def bytes = byteArray [
+						value & 0xFF,
+						value >> 8
+					];
+					SetPhysBytes(addr, bytes, PC)
+			}
+			
+			LeaveLock(off, mapping)
+		}
+		
+		public SetUInt32(addr : uint, value : uint, PC : uint) : void {
+			def (_, off, mapping) = GetPage(addr, PC);
+			EnterLock(off, mapping);
+			
+			match(mapping) {
+				| HWReg(_, _, _, setter) =>
+					setter(CPU, mapping.Addr[off], value, 4, PC)
+				| Physical(_, _, _, _) =>
+					def value = CondSwap(value);
+					def bytes = byteArray [
+						value & 0xFF,
+						(value >> 8) & 0xFF,
+						(value >> 16) & 0xFF,
+						value >> 24
+					];
+					SetPhysBytes(addr, bytes, PC)
+			}
+			
+			LeaveLock(off, mapping)
+		}
+		
+		public SetUInt64(addr : uint, value : ulong, PC : uint) : void {
+			def (_, off, mapping) = GetPage(addr, PC);
+			EnterLock(off, mapping);
+			
+			match(mapping) {
+				| HWReg(_, _, _, setter) =>
+					setter(CPU, mapping.Addr[off], value, 8, PC)
+				| Physical(_, _, _, _) =>
+					def value = CondSwap(value);
+					def bytes = byteArray [
+						value & 0xFF,
+						(value >> 8) & 0xFF,
+						(value >> 16) & 0xFF,
+						(value >> 24) & 0xFF,
+						(value >> 32) & 0xFF,
+						(value >> 40) & 0xFF,
+						(value >> 48) & 0xFF,
+						(value >> 56) & 0xFF,
+					];
+					SetPhysBytes(addr, bytes, PC)
+			}
+			
+			LeaveLock(off, mapping)
+		}
+		
+		public SetSingle(addr : uint, value : Single, PC : uint) : void {
+			SetUInt32(
+				addr,
+				BitConverter.ToUInt32(
+					BitConverter.GetBytes(
+						value
+					),
+					0
+				),
+				PC
+			)
+		}
+		
+		public SetDouble(addr : uint, value : Double, PC : uint) : void {
+			SetUInt64(
+				addr,
+				BitConverter.ToUInt64(
+					BitConverter.GetBytes(
+						value
+					),
+					0
+				),
+				PC
+			)
+		}
+		
+		public GetString(addr : uint, PC : uint) : string {
+			def GetString(addr, accum) {
+				def c = Mem8[addr, PC];
+				
+				if(c == 0)
+					accum
+				else
+					GetString(addr+1, c :: accum)
+			}
+			
+			def accum = GetString(addr, []).Reverse();
+			def arr = array.[byte](accum.Length);
+			mutable i = 0;
+			foreach(c in accum) {
+				arr[i] = c;
+				i++
+			}
+			
+			Text.ASCIIEncoding.ASCII.GetString(arr)
+		}
+		
+		public Dump(addr : uint, size : uint, file : string) : void {
+			print "Dumping memory from {0:X}-{1:X} to {2}" <- (
+				addr,
+				addr + size,
+				file
+			);
+			def file = File.OpenWrite(file);
+			for(mutable i = 0U; i < size; ++i)
+				file.WriteByte(Mem8[addr+i, 0U]);
+			file.Close()
+		}
+		
+		public Mem8 [addr : uint, PC : uint] : byte {
+			get {
+				GetUInt8(addr, PC)
+			}
+			set {
+				SetUInt8(addr, value, PC)
+			}
+		}
+		
+		public Mem16 [addr : uint, PC : uint] : ushort {
+			get {
+				GetUInt16(addr, PC)
+			}
+			set {
+				SetUInt16(addr, value, PC)
+			}
+		}
+		
+		public Mem32 [addr : uint, PC : uint] : uint {
+			get {
+				GetUInt32(addr, PC)
+			}
+			set {
+				SetUInt32(addr, value, PC)
+			}
+		}
+		
+		public Mem64 [addr : uint, PC : uint] : ulong {
+			get {
+				GetUInt64(addr, PC)
+			}
+			set {
+				SetUInt64(addr, value, PC)
+			}
+		}
+		
+		public FPMem32 [addr : uint, PC : uint] : Single {
+			get {
+				GetSingle(addr, PC)
+			}
+			set {
+				SetSingle(addr, value, PC)
+			}
+		}
+		
+		public FPMem64 [addr : uint, PC : uint] : Double {
+			get {
+				GetDouble(addr, PC)
+			}
+			set {
+				SetDouble(addr, value, PC)
+			}
+		}
+	}
+}

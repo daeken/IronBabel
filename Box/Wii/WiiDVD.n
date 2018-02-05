@@ -1,0 +1,104 @@
+using System;
+using System.IO;
+using System.Math;
+using System.Security.Cryptography;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Misc;
+
+namespace IronBabel.Box.Wii {
+	public class WiiDVD {
+		static MasterKey : array [byte] = array[
+			0xeb :> byte, 0xe4, 0x2a, 0x22,
+			0x5e, 0x85, 0x93, 0xe4, 
+			0x48, 0xd9, 0xc5, 0x45, 
+			0x73, 0x81, 0xaa, 0xf7
+		];
+		mutable Temp : array [byte];
+		mutable Temp2 : array [byte];
+		mutable Key : array [byte];
+		mutable IV : array [byte];
+		mutable NullIV : array [byte];
+		mutable Fp : Stream;
+		mutable Off : uint;
+		mutable DOff : uint;
+		mutable Rijn : RijndaelManaged;
+		mutable RijnD : ICryptoTransform;
+		mutable MStream : Stream;
+		
+		public this(fn : string, part : uint) {
+			def ReadUInt32() {
+				_ = Fp.Read(Temp, 0, 4);
+				
+				Misc.Swap(BitConverter.ToUInt32(Temp, 0))
+			}
+			
+			Temp = array(0x8000);
+			Temp2 = array(0x8000);
+			Key = array(16);
+			IV = array(16);
+			NullIV = array(16);
+			
+			Fp = File.OpenRead(fn);
+			_ = Fp.Seek(0x00040004, SeekOrigin.Begin);
+			
+			def tabOff = ReadUInt32();
+			
+			_ = Fp.Seek((tabOff << 2) + (part << 3), SeekOrigin.Begin);
+			Off = ReadUInt32() << 2;
+			
+			_ = Fp.Seek(Off + 0x1BF, SeekOrigin.Begin);
+			_ = Fp.Read(Temp, 0, 16);
+			
+			_ = Fp.Seek(Off + 0x1DC, SeekOrigin.Begin);
+			_ = Fp.Read(IV, 0, 8);
+			
+			Rijn = RijndaelManaged();
+			Rijn.Padding = PaddingMode.None;
+			
+			def rijnd = Rijn.CreateDecryptor(MasterKey, IV);
+			def stream = CryptoStream(MemoryStream(Temp), rijnd, CryptoStreamMode.Read);
+			_ = stream.Read(Key, 0, 16);
+			stream.Close();
+			
+			RijnD = Rijn.CreateDecryptor(Key, NullIV);
+			MStream = MemoryStream(Temp2);
+			
+			_ = Fp.Seek(Off + 0x2B8, SeekOrigin.Begin);
+			DOff = ReadUInt32() << 2
+		}
+		
+		public Read(mutable pos : uint, mutable size : uint, buffer : array [byte], mutable bufferOff : uint) : void {
+			mutable sub = pos % 0x7C00;
+			pos = (pos / 0x7C00 * 0x8000) + Off + DOff;
+			
+			while(size > 0) {
+				_ = Fp.Seek(pos + 0x3D0, SeekOrigin.Begin);
+				_ = Fp.Read(IV, 0, 16);
+				
+				_ = Fp.Seek(pos + 0x400, SeekOrigin.Begin);
+				_ = Fp.Read(Temp2, 16, 0x7C00);
+				
+				_ = MStream.Seek(0, SeekOrigin.Begin);
+				def cstream = CryptoStream(MStream, RijnD, CryptoStreamMode.Read);
+				_ = cstream.Read(Temp, 0, 16);
+				_ = cstream.Read(Temp, 0, 0x7C00);
+				
+				for(mutable i : int = 0; i < 16; ++i)
+					Temp[i] = (Temp[i] ^ IV[i]) :> byte;
+				
+				_ = Array.Copy(Temp, sub, buffer, bufferOff :> int, Min(0x7C00 - sub, size));
+				
+				if(size > 0x7C00U - sub)
+					size -= 0x7C00U - sub;
+				else
+					size = 0;
+				bufferOff += 0x7C00U - sub;
+				pos += 0x8000;
+				sub = 0U
+			}
+		}
+	}
+}

@@ -1,0 +1,39 @@
+using System;
+using System.IO;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Device.Drive;
+using IronBabel.Filesystem;
+
+namespace IronBabel.Filesystem.HFSPlus {
+	public class HFSPlus : IFilesystem {
+		mutable Drive : IDrive;
+		mutable Start : long;
+		mutable Size  : long;
+		public this(Drive : IDrive, Start : int, Size : int) {
+			this.Drive = Drive;
+			def Start  = (Start :> long) * (Drive.BlockSize :> long);
+			this.Start = Start;
+			def Size   = (Size :> long) * (Drive.BlockSize :> long);
+			this.Size  = Size;
+			
+			Drive.Pos = Start + 1024;
+			def (_, sig) = Drive.Read(2);
+			unless(
+				sig[0] == 'H' :> byte &&
+				sig[1] == '+' :> byte
+			)
+				throw Exception("Bad HFS+ partition");
+		}
+		
+		public List(_path : string) : list [string] {
+			null
+		}
+		
+		public Get(_filename : string) : Stream {
+			null
+		}
+	}
+}

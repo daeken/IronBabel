@@ -1,0 +1,68 @@
+using System;
+using System.Threading;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.CoreSolo;
+
+namespace IronBabel.Box.Xbox.Kernel {
+	public partial class XboxKrnl {
+		mutable ThreadId : uint = 0U;
+		Threads : Hashtable [uint, Thread] = Hashtable();
+		
+		xboxapi(0xFF) PsCreateSystemThreadEx(
+			CPU : CoreSolo,
+			ThreadHandle : pointer [uint],
+			_ThreadExtraSize : uint,
+			_KernelStackSize : uint,
+			_TlsDataSize : uint,
+			ThreadIdRet : pointer [uint],
+			StartContext1 : uint,
+			StartContext2 : uint,
+			CreateSuspended : bool,
+			_DebugStack : bool,
+			StartRoutine : uint
+		) : NtStatus {
+			Threads[ThreadId] = 
+				CPU.CreateThread(
+					fun(CPU) {
+						BaseMMU.CPU = CPU;
+						def CPU = CPU :> CoreSolo;
+						CPU._32 = true;
+						CPU.PC = StartRoutine;
+						
+						def sp = Allocate(CPU, 1024U * 1024U) + 1024U * 1024U - 0xCU;
+						CPU.MMU.Mem32[sp+0U, 0U] = 0x80000FFFU; // This just lets us die at the end of the routine
+						CPU.MMU.Mem32[sp+4U, 0U] = StartContext1;
+						CPU.MMU.Mem32[sp+8U, 0U] = StartContext2;
+						CPU._Esp = sp;
+						print "Thread started at {0:X8} with a stack at {1:X8}" <- (CPU.PC, sp);
+						SetupFS(CPU);
+						
+						def Start() {
+							when(CPU.Execute()) {
+								Start()
+							}
+						}
+						Start();
+						print "Thread ended";
+					}
+				);
+			
+			unless(CreateSuspended)
+				Threads[ThreadId].Start(CPU.Clone());
+			
+			ThreadHandle.Value = 0x40000000U | ThreadId; // Magic number for thread handles
+			
+			unless(ThreadIdRet == null)
+				ThreadIdRet.Value = ThreadId;
+			
+			ThreadId++;
+			
+			NtStatus.Success
+		}
+	}
+}

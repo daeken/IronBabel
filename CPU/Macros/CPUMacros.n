@@ -1,0 +1,154 @@
+using System;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using Nextem;
+using Nextem.String;
+
+namespace IronBabel.Macros {
+	[assembly: Nemerle.Internal.OperatorAttribute ("IronBabel.Macros", ":=", false, 160, 161)]
+	macro @:=(left, right) {
+		<[ Emit(IronBabel.CPU.Expr.Assign($left, IronBabel.CPU.Expr.ToExpr($right))) ]>
+	}
+	
+	[assembly: Nemerle.Internal.OperatorAttribute ("IronBabel.Macros", ":>>", false, 200, 201)]
+	macro @:>>(left, right) {
+		<[ IronBabel.CPU.Expr.Cast($left, $(right.ToString() : string)) ]>
+	}
+	
+	[Nemerle.MacroUsage(
+		Nemerle.MacroPhase.BeforeInheritance,
+		Nemerle.MacroTargets.Field
+	)]
+	macro Register(tb : TypeBuilder, pf : ParsedField)
+	syntax("register") {
+		def name = pf.name.ToString();
+		def lit = PExpr.Literal(
+			Literal.String("CPU._" + name)
+		);
+		pf.name = Splicable.Name(Name("_" + name));
+		pf.modifiers.mods |= NemerleAttributes.Public | NemerleAttributes.Mutable;
+		
+		def size = match(pf.ty) {
+			| <[ ushort ]> => 16
+			| <[ uint ]> => 32
+			| x => throw Exception(
+					"Unknown type {0}" <- x
+				)
+		}
+		
+		tb.Define(
+			<[
+				decl: public static $(name : dyn) : Expr = IronBabel.CPU.Expr.Var($lit, $(size : int));
+			]>
+		)
+	}
+	
+	[Nemerle.MacroUsage(
+		Nemerle.MacroPhase.BeforeInheritance,
+		Nemerle.MacroTargets.Field
+	)]
+	macro SubRegister(tb : TypeBuilder, pf : ParsedField, reg)
+	syntax("subregister", reg) {
+		def (reg, shift) = match(reg) {
+			| <[ ($reg, $(shift : int)) ]>
+			| <[ $reg ]> with shift = 0 =>
+				("_" + reg.ToString(), shift)
+		}
+		
+		def name = pf.name.ToString();
+		def lit = PExpr.Literal(
+			Literal.String("CPU._" + name)
+		);
+		pf.name = Splicable.Name(Name("__" + name));
+		pf.modifiers.mods |= NemerleAttributes.Public;
+		
+		def size = match(pf.ty) {
+			| <[ byte ]> => 1
+			| <[ ushort ]> => 2
+			| x => throw Exception(
+					"Unknown type {0}" <- x
+				)
+		}
+		
+		def getMask = (0xFFFFFFFFU >> (32 - (size << 3))) << shift;
+		def setMask = (0xFFFFFFFFU << (size << 3)) << shift;
+		def setMask = {
+			if(shift == 0)
+				setMask
+			else
+				setMask | (0xFFFFFFFFU >> (32 - shift))
+		}
+		
+		tb.Define(
+			<[
+				decl: public static $(name : dyn) : Expr = IronBabel.CPU.Expr.Var($lit, $(size << 3 : int));
+			]>
+		);
+		tb.Define(
+			<[
+				decl: public $("_" + name : dyn) : $(pf.ty) {
+					get { (($(reg : dyn) & $(getMask : uint)) >> $(shift : int)) :> $(pf.ty) }
+					set { $(reg : dyn) = ($(reg : dyn) & $(setMask : uint)) | ((value :> uint) << $(shift : int)) }
+				}
+			]>
+		)
+	}
+	
+	macro Call(call)
+	syntax("Call", "(", call, ")") {
+		match(call) {
+			| <[ $func(.. $args) : $ftype ]>
+			| <[ $func(.. $args) ]> with ftype = null =>
+				def ftype = {
+					if(ftype == null)
+						""
+					else
+						ftype.ToString()
+				};
+				
+				mutable newArgs = [];
+				foreach(arg in args)
+					newArgs = <[ IronBabel.CPU.Expr.ToExpr($arg) ]> :: newArgs;
+				
+				<[
+					IronBabel.CPU.Expr.Call_(
+						$(ftype : string),
+						$(func.ToString() : string),
+						[.. $(newArgs.Reverse())]
+					)
+				]>
+			
+			| expr => throw Exception(
+					"Unknown call expr {0}" <- expr
+				)
+		}
+	}
+	
+	macro QuoteBlock(block)
+	syntax("quoteblock", block) {
+		<[
+			fun() {
+				$block
+			}
+		]>
+	}
+	
+	macro Mem(size, addr) {
+		def addr = <[ TranslateAddress($addr) ]>;
+		<[
+			match($size) {
+				| 8  => IronBabel.CPU.Expr.Mem8 ($addr, PC)
+				| 16 => IronBabel.CPU.Expr.Mem16($addr, PC)
+				| 32 => IronBabel.CPU.Expr.Mem32($addr, PC)
+				| _ => null
+			}
+		]>
+	}
+	macro Mem8     (addr) { <[ IronBabel.CPU.Expr.Mem8     (TranslateAddress($addr), PC) ]> }
+	macro Mem16    (addr) { <[ IronBabel.CPU.Expr.Mem16    (TranslateAddress($addr), PC) ]> }
+	macro Mem32    (addr) { <[ IronBabel.CPU.Expr.Mem32    (TranslateAddress($addr), PC) ]> }
+	macro Mem64    (addr) { <[ IronBabel.CPU.Expr.Mem64    (TranslateAddress($addr), PC) ]> }
+	macro MemSingle(addr) { <[ IronBabel.CPU.Expr.MemSingle(TranslateAddress($addr), PC) ]> }
+	macro MemDouble(addr) { <[ IronBabel.CPU.Expr.MemDouble(TranslateAddress($addr), PC) ]> }
+}

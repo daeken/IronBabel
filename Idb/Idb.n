@@ -1,0 +1,58 @@
+using System;
+using System.Globalization;
+using Nemerle.Collections;
+using Nextem.String;
+
+using IronBabel.Box;
+using IronBabel.CPU;
+
+namespace IronBabel.Idb {
+	public class Idb {
+		Box : IBox;
+		CPU : BaseCPU;
+		mutable BPNum : int = 0;
+		BP : Hashtable [int, uint] = Hashtable();
+		
+		public this(box : IBox, cpu : BaseCPU) {
+			Box = box;
+			CPU = cpu;
+			
+			Prompt()
+		}
+		
+		Prompt() : void {
+			printn "IDB> ";
+			
+			match(match(Console.ReadLine()) { | null => "" | x => x.Trim() }.Split1(" ")) {
+				| ("g", _) => Box.Start()
+				| ("b", rest) =>
+					def addr = uint.Parse(rest, NumberStyles.HexNumber);
+					print "Added breakpoint {0} at 0x{1:X8}" <- (BPNum, addr);
+					CPU.Breakpoints[addr] = true;
+					BP[BPNum] = addr;
+					BPNum++
+				| ("d", rest) =>
+					def num = int.Parse(rest);
+					def addr = BP[num];
+					print "Deleted breakpoint {0} at 0x{1:X8}" <- (num, addr);
+					CPU.Breakpoints.Remove(addr);
+					BP.Remove(num)
+				| ("r", _) =>
+					CPU.Debug(CPU.CachePC)
+				| ("c", _) =>
+					CPU.ContinueAddr = CPU.CachePC;
+					Box.Start()
+				| ("ta", _) => 
+					CPU.RecordAll = !CPU.RecordAll;
+					CPU.MethodCache.Clear();
+					if(CPU.RecordAll)
+						print "Recording all executed blocks"
+					else
+						print "Not recording"
+				| (x, _) => print "Unknown command {0}" <- x
+			}
+			
+			Prompt()
+		}
+	}
+}

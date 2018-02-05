@@ -1,0 +1,36 @@
+using System;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.Box;
+using IronBabel.CPU.IA32;
+
+namespace IronBabel.Box.PC {
+	public partial class BIOS {
+		protected CPU : IA32;
+		protected Mem : int;
+		public this(CPU : IA32, Mem : int) {
+			this.CPU = CPU;
+			this.Mem = Mem;
+			
+			CPU.SetInterruptHandler(0x10, VideoService);
+			CPU.SetInterruptHandler(0x11, HWService);
+			CPU.SetInterruptHandler(0x12, GetMemorySize);
+			CPU.SetInterruptHandler(0x13, DiskService);
+			CPU.SetInterruptHandler(0x14, SerialService);
+			CPU.SetInterruptHandler(0x15, MiscService);
+			CPU.SetInterruptHandler(0x17, PrintService);
+			CPU.SetInterruptHandler(0x1A, RTCService);
+		}
+		
+		GetMemorySize(_ : IA32) : void {
+			CPU._Ax = (
+				if(Mem > 640)
+					640
+				else
+					Mem
+			) :> ushort
+		}
+	}
+}

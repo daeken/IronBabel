@@ -1,0 +1,26 @@
+using System;
+using System.IO;
+using Nemerle.Collections;
+
+using Nextem;
+using Nextem.String;
+
+using IronBabel.CPU;
+using IronBabel.CPU.IA32;
+using IronBabel.Device.Drive;
+
+namespace IronBabel.Box.PC {
+	public partial class BIOS {
+		PrintService(_ : IA32) : void {
+			match(CPU._Ah) {
+				| 0x01 =>
+					CPU._Ah = 0
+				
+				| vec =>
+					throw Exception(
+						"Unknown print service vector {0:X}h" <- vec
+					)
+			}
+		}
+	}
+}
